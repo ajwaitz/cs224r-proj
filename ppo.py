@@ -14,8 +14,8 @@ import torch.optim as optim
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-
-
+from transformers.transformeragent import TransformerAgent
+from utils import layer_init
 @dataclass
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
@@ -34,6 +34,8 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+    use_transformer: bool = False
+    """whether to use the transformer-based agent instead of the MLP agent"""
 
     # Algorithm specific arguments
     env_id: str = "CartPole-v1"
@@ -92,11 +94,6 @@ def make_env(env_id, idx, capture_video, run_name):
 
     return thunk
 
-
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
 
 
 
@@ -195,7 +192,8 @@ if __name__ == "__main__":
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(envs).to(device)
+    # Choose agent type based on args
+    agent = TransformerAgent(envs).to(device) if args.use_transformer else Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
