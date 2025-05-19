@@ -34,8 +34,6 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    use_transformer: bool = False
-    """whether to use the transformer-based agent instead of the MLP agent"""
 
     # Algorithm specific arguments
     env_id: str = "CartPole-v1"
@@ -114,7 +112,7 @@ def make_env(env_id, idx, capture_video, run_name):
 #             action = probs.sample()
 #         return action, probs.log_prob(action), probs.entropy(), self.critic(x) 
 
-class Agent(nn.Module):
+class MLPAgent(nn.Module):
     def __init__(self, envs, intermediate_size=64):
         super().__init__()
 
@@ -183,7 +181,12 @@ if __name__ == "__main__":
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     # Choose agent type based on args
-    agent = TransformerAgent(envs).to(device) if args.use_transformer else Agent(envs).to(device)
+    if args.model_type == "transformer":
+        agent = TransformerAgent(envs).to(device)
+    if args.model_type == "mlp":
+        agent = MLPAgent(envs).to(device)
+    else:
+        agent = MLPAgent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
