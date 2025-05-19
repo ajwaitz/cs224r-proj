@@ -7,6 +7,12 @@ import time
 from dataclasses import dataclass
 
 import gymnasium as gym
+from gym_pomdp_wrappers import MuJoCoHistoryEnv
+
+import popgym
+from popgym.wrappers import PreviousAction, Antialias, Markovian, Flatten, DiscreteAction
+from popgym.core.observability import Observability, STATE
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -83,16 +89,41 @@ class Args:
 
 
 def make_env(env_id, idx, capture_video, run_name):
+
     def thunk():
-        if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = gym.make(env_id)
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        return env
+        # https://popgym.readthedocs.io/en/latest/environment_quickstart.html
+        env = popgym.envs.position_only_cartpole.PositionOnlyCartPoleEasy()
+        wrapped_env = PreviousAction(env)
+        wrapped_env = Antialias(wrapped_env)
+        wrapped_env = Flatten(wrapped_env)
+        # wrapped_env = DiscreteAction(wrapped_env)
+
+        # wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
+        wrapped_env.reset()
+        # obs, reward, terminated, truncated, info = wrapped_env.step(wrapped_env.action_space.sample())
+
+        # Append prev action to obs, flatten obs/action spaces, then map the multidiscrete action space to a single discrete action for Q learning
+        # wrapped = DiscreteAction(Flatten(PreviousAction(env)))
+
+        return wrapped_env
 
     return thunk
+
+    # def thunk():
+    #     if capture_video and idx == 0:
+    #         env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
+
+    #         # env = gym.make(env_id, render_mode="rgb_array")
+    #         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+    #     else:
+    #         env = gym.make(env_id)
+    #         # env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
+    #         env = MuJoCoHistoryEnv(env_id, hist_len=4, history_type="history_ac_pomdp")
+    #     env = gym.wrappers.RecordEpisodeStatistics(env)
+        
+    #     return env
+
+    # return thunk
 
 
 
