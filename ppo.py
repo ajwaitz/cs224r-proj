@@ -70,6 +70,8 @@ class Args:
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
     """the target KL divergence threshold"""
+    model_type: str = "mlp"
+    """the type of model parameterization to use"""
 
     # to be filled in runtime
     batch_size: int = 0
@@ -99,24 +101,11 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-
 # class TTTAgent(nn.Module):
-#    def __init__(self, envs):
+#    def __init__(self, envs, intermediate_size=64):
 #         super().__init__()
-#         self.critic = nn.Sequential(
-#             layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-#             nn.Tanh(),
-#             layer_init(nn.Linear(64, 64)),
-#             nn.Tanh(),
-#             layer_init(nn.Linear(64, 1), std=1.0),
-#         )
-#         self.actor = nn.Sequential(
-#             layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-#             nn.Tanh(),
-#             layer_init(nn.Linear(64, 64)),
-#             nn.Tanh(),
-#             layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01),
-#         )
+#         self.critic = TTTModel(TTTConfig(intermediate_size=intermediate_size))
+
 
 #     def get_value(self, x):
 #         return self.critic(x)
@@ -129,21 +118,22 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 #         return action, probs.log_prob(action), probs.entropy(), self.critic(x) 
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs, intermediate_size=64):
         super().__init__()
+
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), intermediate_size)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(intermediate_size, intermediate_size)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(intermediate_size, 1), std=1.0),
         )
         self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), intermediate_size)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(intermediate_size, intermediate_size)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01),
+            layer_init(nn.Linear(intermediate_size, envs.single_action_space.n), std=0.01),
         )
 
     def get_value(self, x):
@@ -162,7 +152,7 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.exp_name}__{args.model_type}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
 
