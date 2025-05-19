@@ -39,8 +39,11 @@ class Transformer(nn.Module):
         # Create causal mask to prevent attending to future positions
         if mask is None:
             # Create a mask that allows attention to current and past positions only
-            mask = torch.triu(torch.ones(x.size(1), x.size(1)), diagonal=1).bool()
-            mask = mask.unsqueeze(0).expand(x.size(0), -1, -1)
+            seq_len = x.size(1)
+            # Create a square mask for the sequence length
+            mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+            # The transformer expects the mask to be broadcastable to [batch_size, num_heads, seq_len, seq_len]
+            # We'll let PyTorch handle the broadcasting
 
         # Apply transformer
         x = self.transformer(x, mask=mask)
