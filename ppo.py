@@ -93,12 +93,15 @@ def make_env(env_id, idx, capture_video, run_name):
     def thunk():
         # https://popgym.readthedocs.io/en/latest/environment_quickstart.html
         env = popgym.envs.position_only_cartpole.PositionOnlyCartPoleEasy()
+        env.render_mode = "rgb_array"
+
         wrapped_env = PreviousAction(env)
         wrapped_env = Antialias(wrapped_env)
         wrapped_env = Flatten(wrapped_env)
         # wrapped_env = DiscreteAction(wrapped_env)
 
-        # wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
+        wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
+        wrapped_env = gym.wrappers.RecordEpisodeStatistics(wrapped_env)
         wrapped_env.reset()
         # obs, reward, terminated, truncated, info = wrapped_env.step(wrapped_env.action_space.sample())
 
