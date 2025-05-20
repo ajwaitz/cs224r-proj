@@ -6,6 +6,10 @@ import random
 import time
 from dataclasses import dataclass
 
+import popgym
+from popgym.wrappers import PreviousAction, Antialias, Markovian, Flatten, DiscreteAction
+from popgym.core.observability import Observability, STATE
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -42,7 +46,7 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 16
     """the number of parallel game environments"""
     num_steps: int = 128
     """the number of steps to run in each environment per policy rollout"""
@@ -50,11 +54,11 @@ class Args:
     """Toggle learning rate annealing for policy and value networks"""
     gamma: float = 0.99
     """the discount factor gamma"""
-    gae_lambda: float = 0.95
+    gae_lambda: float = 0.98
     """the lambda for the general advantage estimation"""
     num_minibatches: int = 4
     """the number of mini-batches"""
-    update_epochs: int = 4
+    update_epochs: int = 2
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -83,14 +87,27 @@ class Args:
 
 
 def make_env(env_id, idx, capture_video, run_name):
+
     def thunk():
-        if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = gym.make(env_id)
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        return env
+        # https://popgym.readthedocs.io/en/latest/environment_quickstart.html
+        env = popgym.envs.position_only_cartpole.PositionOnlyCartPoleEasy()
+        env.render_mode = "rgb_array"
+
+        wrapped_env = env
+        # wrapped_env = PreviousAction(env)
+        wrapped_env = Antialias(wrapped_env)
+        wrapped_env = Flatten(wrapped_env)
+        # wrapped_env = DiscreteAction(wrapped_env)
+
+        wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
+        wrapped_env = gym.wrappers.RecordEpisodeStatistics(wrapped_env)
+        wrapped_env.reset()
+        # obs, reward, terminated, truncated, info = wrapped_env.step(wrapped_env.action_space.sample())
+
+        # Append prev action to obs, flatten obs/action spaces, then map the multidiscrete action space to a single discrete action for Q learning
+        # wrapped = DiscreteAction(Flatten(PreviousAction(env)))
+
+        return wrapped_env
 
     return thunk
 
@@ -190,7 +207,7 @@ if __name__ == "__main__":
     else:
         print("Defaulting to MLPAgent")
         agent = MLPAgent(envs).to(device)
-    optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+    optimizer = optim.AdamW(agent.parameters(), lr=args.learning_rate,weight_decay=0.01, eps=1e-5)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -290,53 +307,55 @@ if __name__ == "__main__":
         b_inds = np.arange(args.batch_size)
         clipfracs = []
         for epoch in range(args.update_epochs):
-            mb_inds = np.arange(args.num_envs)
-            # breakpoint()
-            _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds], _all=True)
-            logratio = newlogprob - b_logprobs[mb_inds]
-            ratio = logratio.exp()
-
-            with torch.no_grad():
-                # calculate approx_kl http://joschu.net/blog/kl-approx.html
-                old_approx_kl = (-logratio).mean()
-                approx_kl = ((ratio - 1) - logratio).mean()
-                clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
-
-            mb_advantages = b_advantages[mb_inds]
-            if args.norm_adv:
-                mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-            # Policy loss
-            pg_loss1 = -mb_advantages * ratio
-            pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-            # Value loss
-            # newvalue = newvalue.view(-1)
-            if args.clip_vloss:
+            _mb_inds = np.arange(args.minibatch_size)
+            for i in range(0, args.batch_size, args.minibatch_size):
+                mb_inds = _mb_inds + i
                 # breakpoint()
-                v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                v_clipped = b_values[mb_inds] + torch.clamp(
-                    newvalue - b_values[mb_inds],
-                    -args.clip_coef,
-                    args.clip_coef,
-                )
-                v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                v_loss = 0.5 * v_loss_max.mean()
-            else:
-                v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds], _all=True)
+                logratio = newlogprob - b_logprobs[mb_inds]
+                ratio = logratio.exp()
 
-            entropy_loss = entropy.mean()
-            loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    old_approx_kl = (-logratio).mean()
+                    approx_kl = ((ratio - 1) - logratio).mean()
+                    clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
 
-            optimizer.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-            optimizer.step()
+                mb_advantages = b_advantages[mb_inds]
+                if args.norm_adv:
+                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
-        if args.target_kl is not None and approx_kl > args.target_kl:
-            break
+                # Policy loss
+                pg_loss1 = -mb_advantages * ratio
+                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+                # Value loss
+                # newvalue = newvalue.view(-1)
+                if args.clip_vloss:
+                    # breakpoint()
+                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                    v_clipped = b_values[mb_inds] + torch.clamp(
+                        newvalue - b_values[mb_inds],
+                        -args.clip_coef,
+                        args.clip_coef,
+                    )
+                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                    v_loss = 0.5 * v_loss_max.mean()
+                else:
+                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+
+                entropy_loss = entropy.mean()
+                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+
+                optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+                optimizer.step()
+
+            if args.target_kl is not None and approx_kl > args.target_kl:
+                break
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
