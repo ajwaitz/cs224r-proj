@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 
 import gymnasium as gym
-from gym_pomdp_wrappers import MuJoCoHistoryEnv
+# from gym_pomdp_wrappers import MuJoCoHistoryEnv
 
 import popgym
 from popgym.wrappers import PreviousAction, Antialias, Markovian, Flatten, DiscreteAction
@@ -95,10 +95,11 @@ def make_env(env_id, idx, capture_video, run_name):
         env = popgym.envs.position_only_cartpole.PositionOnlyCartPoleEasy()
         env.render_mode = "rgb_array"
 
-        wrapped_env = PreviousAction(env)
+        wrapped_env = env
+        # wrapped_env = PreviousAction(wrapped_env)
         wrapped_env = Antialias(wrapped_env)
         wrapped_env = Flatten(wrapped_env)
-        # wrapped_env = DiscreteAction(wrapped_env)
+        wrapped_env = DiscreteAction(wrapped_env)
 
         wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
         wrapped_env = gym.wrappers.RecordEpisodeStatistics(wrapped_env)

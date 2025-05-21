@@ -97,7 +97,7 @@ def make_env(env_id, idx, capture_video, run_name):
         # wrapped_env = PreviousAction(env)
         wrapped_env = Antialias(wrapped_env)
         wrapped_env = Flatten(wrapped_env)
-        # wrapped_env = DiscreteAction(wrapped_env)
+        wrapped_env = DiscreteAction(wrapped_env)
 
         wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
         wrapped_env = gym.wrappers.RecordEpisodeStatistics(wrapped_env)
@@ -307,8 +307,10 @@ if __name__ == "__main__":
         b_inds = np.arange(args.batch_size)
         clipfracs = []
         for epoch in range(args.update_epochs):
-            _mb_inds = np.arange(args.minibatch_size)
-            for i in range(0, args.batch_size, args.minibatch_size):
+            _mb_inds = np.arange(4)
+            # breakpoint()
+            for i in range(0, args.num_envs, 4):
+                # breakpoint()
                 mb_inds = _mb_inds + i
                 # breakpoint()
                 _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds], _all=True)
