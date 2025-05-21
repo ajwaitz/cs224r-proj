@@ -36,7 +36,7 @@ class PPOTrainer:
         self.embed_dim = config["transformer"]["embed_dim"]
 
         # Initialize wandb
-        wandb.init(project="episodic-transformer-memory-ppo", name=run_id, config=config)
+        wandb.init(project="cs224r-proj", entity="ajwaitz", name=run_id, config=config)
         
         # Setup Tensorboard Summary Writer
         if not os.path.exists("./summaries"):
