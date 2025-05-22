@@ -77,7 +77,9 @@ class PPOTrainer:
             self.obs[w] = worker.child.recv()
 
         # Setup placeholders for each worker's current episodic memory
-        self.memory = torch.zeros((self.num_workers, self.max_episode_length, self.num_blocks, self.embed_dim), dtype=torch.float32)
+        print("--- ", observation_space.shape, " ---")
+        self.observation_space_dim = observation_space.shape[0]
+        self.memory = torch.zeros((self.num_workers, self.max_episode_length, self.num_blocks, self.observation_space_dim), dtype=torch.float32)
         # Generate episodic memory mask used in attention
         self.memory_mask = torch.tril(torch.ones((self.memory_length, self.memory_length)), diagonal=-1)
         """ e.g. memory mask tensor looks like this if memory_length = 6
@@ -211,7 +213,7 @@ class PPOTrainer:
                     mem_index = self.buffer.memory_index[w, t]
                     self.buffer.memories[mem_index] = self.buffer.memories[mem_index].clone()
                     # Reset episodic memory
-                    self.memory[w] = torch.zeros((self.max_episode_length, self.num_blocks, self.embed_dim), dtype=torch.float32)
+                    self.memory[w] = torch.zeros((self.max_episode_length, self.num_blocks, self.observation_space_dim), dtype=torch.float32)
                     if t < self.config["worker_steps"] - 1:
                         # Store memory inside the buffer
                         self.buffer.memories.append(self.memory[w])
@@ -257,8 +259,8 @@ class PPOTrainer:
             mini_batch_generator = self.buffer.mini_batch_generator()
             for mini_batch in mini_batch_generator:
                 train_info.append(self._train_mini_batch(mini_batch, learning_rate, clip_range, beta))
-                for key, value in self.model.get_grad_norm().items():
-                    grad_info.setdefault(key, []).append(value)
+                # for key, value in self.model.get_grad_norm().items():
+                #     grad_info.setdefault(key, []).append(value)
         return train_info, grad_info
 
     def _train_mini_batch(self, samples:dict, learning_rate:float, clip_range:float, beta:float) -> list:

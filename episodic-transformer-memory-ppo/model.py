@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from transformer import Transformer
+from ttt import TTTModel, TTTConfig
 
 class ActorCriticModel(nn.Module):
     def __init__(self, config, observation_space, action_space_shape, max_episode_length):
@@ -45,7 +46,20 @@ class ActorCriticModel(nn.Module):
         nn.init.orthogonal_(self.lin_hidden.weight, np.sqrt(2))
 
         # Transformer Blocks
-        self.transformer = Transformer(config["transformer"], self.memory_layer_size, self.max_episode_length)
+        # self.transformer = Transformer(config["transformer"], self.memory_layer_size, self.max_episode_length)
+
+        tttconfig = TTTConfig(
+            vocab_size=observation_space.shape[0],
+            hidden_size=self.memory_layer_size,
+            max_position_embeddings=self.max_episode_length,
+            intermediate_size=self.memory_layer_size,
+            num_attention_heads=config["transformer"]["num_heads"],
+            num_hidden_layers=4,
+            dropout=0.1,
+            activation_function="relu",
+            max_episode_steps=self.max_episode_length,
+        )
+        self.ttt = TTTModel(tttconfig, self.max_episode_length)
 
         # Decouple policy from value
         # Hidden layer of the policy
@@ -83,6 +97,10 @@ class ActorCriticModel(nn.Module):
         """
         # Set observation as input to the model
         h = obs
+
+        h = h.unsqueeze(1)
+        memory = memory.squeeze(2)
+        hist = torch.cat((h, memory), dim=1)
         # Forward observation encoder
         if len(self.observation_space_shape) > 1:
             batch_size = h.size()[0]
@@ -97,7 +115,12 @@ class ActorCriticModel(nn.Module):
         h = F.relu(self.lin_hidden(h))
         
         # Forward transformer blocks
-        h, memory = self.transformer(h, memory, memory_mask, memory_indices)
+        # h, memory = self.transformer(h, memory, memory_mask, memory_indices)
+        # breakpoint()
+        out = self.ttt.forward(hist, attention_mask=memory_mask, position_ids=memory_indices, return_dict=True)
+
+        memory = obs[:, None, :]
+        h = out.last_hidden_state[:, -1, :]
 
         # Decouple policy from value
         # Feed hidden layer (policy)
@@ -159,6 +182,7 @@ class ActorCriticModel(nn.Module):
         Returns:
             {float} -- Norm of the gradients of the given modules. 
         """
+        return None
         grads = []
         for module in modules:
             for name, parameter in module.named_parameters():
