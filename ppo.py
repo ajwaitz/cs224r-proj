@@ -5,6 +5,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
+from collections import deque
 
 import gymnasium as gym
 # from gym_pomdp_wrappers import MuJoCoHistoryEnv
@@ -44,13 +45,13 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "CartPole-v1"
     """the id of the environment"""
-    total_timesteps: int = 500000
+    total_timesteps: int = 1228800  # 16 workers * 256 steps * 300 updates
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 16  # Match n_workers from transformer config
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 256  # Match worker_steps from transformer config
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -93,6 +94,7 @@ def make_env(env_id, idx, capture_video, run_name):
     def thunk():
         # https://popgym.readthedocs.io/en/latest/environment_quickstart.html
         env = popgym.envs.position_only_cartpole.PositionOnlyCartPoleEasy()
+        print('using env: ', env)
         env.render_mode = "rgb_array"
 
         wrapped_env = env
@@ -178,11 +180,16 @@ class MLPAgent(nn.Module):
 
 
 if __name__ == "__main__":
+    total_num_eps = 0
     args = tyro.cli(Args)
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = f"{args.env_id}__{args.exp_name}__{args.model_type}__{args.seed}__{int(time.time())}"
+    
+    # Add deque to store episode information
+    episode_infos = deque(maxlen=100)  # Store last 100 episodes like in trainer.py
+    
     if args.track:
         import wandb
 
@@ -220,6 +227,7 @@ if __name__ == "__main__":
         agent = TransformerAgent(envs).to(device)
     if args.model_type == "mlp":
         agent = MLPAgent(envs).to(device)
+        print('Using MLP agent...')
     else:
         agent = MLPAgent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -267,9 +275,22 @@ if __name__ == "__main__":
             if "final_info" in infos:
                 for info in infos["final_info"]:
                     if info and "episode" in info:
-                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
+                        total_num_eps += 1
+                        # Store episode info in deque
+                        episode_infos.append(info["episode"])
+                        # Calculate mean reward from deque
+                        reward_mean = np.mean([ep["r"] for ep in episode_infos])
+                        reward_std = np.std([ep["r"] for ep in episode_infos])
+                        length_mean = np.mean([ep["l"] for ep in episode_infos])
+                        length_std = np.std([ep["l"] for ep in episode_infos])
+                        
+                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}, reward_mean={reward_mean:.2f}, reward_std={reward_std:.2f}, length_mean={length_mean:.1f}, length_std={length_std:.2f}")
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                        writer.add_scalar("charts/reward_mean", reward_mean, global_step)
+                        writer.add_scalar("charts/reward_std", reward_std, global_step)
+                        writer.add_scalar("charts/length_mean", length_mean, global_step)
+                        writer.add_scalar("charts/length_std", length_std, global_step)
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -365,5 +386,6 @@ if __name__ == "__main__":
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
+    print('total num eps: ', total_num_eps)
     envs.close()
     writer.close()
