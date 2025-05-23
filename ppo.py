@@ -91,45 +91,45 @@ class Args:
 
 def make_env(env_id, idx, capture_video, run_name):
 
-    def thunk():
-        # https://popgym.readthedocs.io/en/latest/environment_quickstart.html
-        env = popgym.envs.position_only_cartpole.PositionOnlyCartPoleEasy()
-        print('using env: ', env)
-        env.render_mode = "rgb_array"
-
-        wrapped_env = env
-        # wrapped_env = PreviousAction(wrapped_env)
-        wrapped_env = Antialias(wrapped_env)
-        wrapped_env = Flatten(wrapped_env)
-        wrapped_env = DiscreteAction(wrapped_env)
-
-        wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
-        wrapped_env = gym.wrappers.RecordEpisodeStatistics(wrapped_env)
-        wrapped_env.reset()
-        # obs, reward, terminated, truncated, info = wrapped_env.step(wrapped_env.action_space.sample())
-
-        # Append prev action to obs, flatten obs/action spaces, then map the multidiscrete action space to a single discrete action for Q learning
-        # wrapped = DiscreteAction(Flatten(PreviousAction(env)))
-
-        return wrapped_env
-
-    return thunk
-
     # def thunk():
-    #     if capture_video and idx == 0:
-    #         env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
+    #     # https://popgym.readthedocs.io/en/latest/environment_quickstart.html
+    #     env = popgym.envs.position_only_cartpole.PositionOnlyCartPoleEasy()
+    #     print('using env: ', env)
+    #     env.render_mode = "rgb_array"
 
-    #         # env = gym.make(env_id, render_mode="rgb_array")
-    #         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-    #     else:
-    #         env = gym.make(env_id)
-    #         # env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
-    #         env = MuJoCoHistoryEnv(env_id, hist_len=4, history_type="history_ac_pomdp")
-    #     env = gym.wrappers.RecordEpisodeStatistics(env)
-        
-    #     return env
+    #     wrapped_env = env
+    #     # wrapped_env = PreviousAction(wrapped_env)
+    #     wrapped_env = Antialias(wrapped_env)
+    #     wrapped_env = Flatten(wrapped_env)
+    #     wrapped_env = DiscreteAction(wrapped_env)
+
+    #     wrapped_env = gym.wrappers.RecordVideo(wrapped_env, f"videos/{run_name}")
+    #     wrapped_env = gym.wrappers.RecordEpisodeStatistics(wrapped_env)
+    #     wrapped_env.reset()
+    #     # obs, reward, terminated, truncated, info = wrapped_env.step(wrapped_env.action_space.sample())
+
+    #     # Append prev action to obs, flatten obs/action spaces, then map the multidiscrete action space to a single discrete action for Q learning
+    #     # wrapped = DiscreteAction(Flatten(PreviousAction(env)))
+
+    #     return wrapped_env
 
     # return thunk
+
+    def thunk():
+        if capture_video and idx == 0:
+            # env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
+
+            env = gym.make(env_id, render_mode="rgb_array")
+            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+        else:
+            env = gym.make(env_id)
+            # env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
+            # env = MuJoCoHistoryEnv(env_id, hist_len=4, history_type="history_ac_pomdp")
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        
+        return env
+
+    return thunk
 
 
 
@@ -226,7 +226,7 @@ if __name__ == "__main__":
     if args.model_type == "transformer":
         agent = TransformerAgent(envs).to(device)
     if args.model_type == "mlp":
-        agent = MLPAgent(envs).to(device)
+        agent = MLPAgent(envs, intermediate_size=64).to(device)
         print('Using MLP agent...')
     else:
         agent = MLPAgent(envs).to(device)
