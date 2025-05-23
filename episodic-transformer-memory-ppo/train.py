@@ -20,7 +20,7 @@ def main():
     cpu = options["--cpu"]
     # Parse the yaml config file. The result is a dictionary, which is passed to the trainer.
     config = YamlParser(options["--config"]).get_config()
-    config["transformer"]["num_blocks"] = 1
+    # config["transformer"]["num_blocks"] = 1
 
     # Determine the device to be used for training and set the default tensor type
     if not cpu:

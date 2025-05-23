@@ -54,10 +54,11 @@ class ActorCriticModel(nn.Module):
             max_position_embeddings=self.max_episode_length,
             intermediate_size=self.memory_layer_size,
             num_attention_heads=config["transformer"]["num_heads"],
-            num_hidden_layers=4,
+            num_hidden_layers=config["transformer"]["ttt_layers"],
             dropout=0.1,
-            activation_function="relu",
+            hidden_act="relu",
             max_episode_steps=self.max_episode_length,
+            ttt_layer_type="mlp",
         )
         self.ttt = TTTModel(tttconfig, self.max_episode_length)
 
