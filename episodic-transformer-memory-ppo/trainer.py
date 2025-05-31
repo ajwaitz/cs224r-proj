@@ -14,6 +14,8 @@ from model import ActorCriticModel
 from utils import batched_index_select, create_env, polynomial_decay, process_episode_info
 from worker import Worker
 
+from tqdm import tqdm
+
 class PPOTrainer:
     def __init__(self, config:dict, run_id:str="run", device:torch.device=torch.device("cpu")) -> None:
         """Initializes all needed training components.
@@ -34,6 +36,14 @@ class PPOTrainer:
         self.memory_length = config["transformer"]["memory_length"]
         self.num_blocks = config["transformer"]["num_blocks"]
         self.embed_dim = config["transformer"]["embed_dim"]
+
+        # Initialize members for BC data
+        self.bc_obs_all = None
+        self.bc_actions_all = None
+
+        bc_config = self.config.get("bc_pretraining", {})
+        if bc_config.get("enabled", False):
+            self._load_and_prepare_bc_data(bc_config)
 
         # Initialize wandb
         wandb.init(project="cs224r-proj", entity="ajwaitz", name=run_id, config=config)
@@ -106,8 +116,151 @@ class PPOTrainer:
         # Log model architecture to wandb
         wandb.watch(self.model)
 
+    def _load_and_prepare_bc_data(self, bc_config: dict):
+        expert_data_path = bc_config.get("expert_data_path")
+        if not expert_data_path:
+            print("WARNING: BC pre-training enabled but 'expert_data_path' not specified. Skipping BC.")
+            self.config["bc_pretraining"]["enabled"] = False # Disable to avoid errors
+            return
+
+        print(f"Loading expert trajectories for BC from {expert_data_path}...")
+        try:
+            try:
+                trajectories = torch.load(expert_data_path, map_location="cpu") # Load to CPU first
+            except (pickle.UnpicklingError, TypeError, AttributeError, RuntimeError) as e_torch:
+                print(f"torch.load failed ({e_torch}), attempting pickle.load...")
+                try:
+                    with open(expert_data_path, "rb") as f:
+                        trajectories = pickle.load(f)
+                except Exception as e_pickle:
+                    print(f"ERROR: Failed to load trajectories with torch.load and pickle.load from {expert_data_path}: {e_pickle}")
+                    self.config["bc_pretraining"]["enabled"] = False
+                    return
+            
+            obs_list = []
+            actions_list = []
+            for traj in trajectories:
+                obs_list.append(torch.tensor(traj["observations"], dtype=torch.float32))
+                actions_list.append(torch.tensor(traj["actions"], dtype=torch.long))
+
+            self.bc_obs_all = torch.cat(obs_list, dim=0).to(self.device)
+            self.bc_actions_all = torch.cat(actions_list, dim=0).to(self.device)
+            print(f"Successfully loaded {self.bc_obs_all.shape[0]} expert (observation, action) pairs for BC.")
+
+        except FileNotFoundError:
+            print(f"ERROR: Expert trajectories file not found at {expert_data_path}. BC pre-training will be skipped.")
+            self.config["bc_pretraining"]["enabled"] = False
+        except Exception as e:
+            print(f"ERROR: Could not load or process expert trajectories from {expert_data_path}: {e}. BC pre-training will be skipped.")
+            self.config["bc_pretraining"]["enabled"] = False
+
+    def _run_bc_pretraining(self):
+        bc_config = self.config["bc_pretraining"]
+        epochs = bc_config.get("epochs", 10)
+        batch_size = bc_config.get("batch_size", 64)
+        bc_learning_rate = bc_config.get("learning_rate", self.lr_schedule["initial"]) 
+
+        if self.bc_obs_all is None or self.bc_actions_all is None:
+            print("BC data not available. Skipping BC pre-training.")
+            return
+
+        print(f"Starting Behavioral Cloning pre-training for {epochs} epochs...")
+        self.model.train() # Ensure model is in training mode
+
+        # Temporarily set learning rate for BC if different
+        original_lrs = [pg["lr"] for pg in self.optimizer.param_groups]
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = bc_learning_rate
+
+        num_samples = self.bc_obs_all.shape[0]
+        num_batches_per_epoch = (num_samples + batch_size - 1) // batch_size
+
+        for epoch in range(epochs):
+            permutation = torch.randperm(num_samples, device=self.device)
+            epoch_total_loss = 0.0
+            
+            batch_iterator = range(0, num_samples, batch_size)
+            progress_bar = tqdm(batch_iterator, 
+                                desc=f"BC Epoch {epoch + 1}/{epochs}", 
+                                total=num_batches_per_epoch, 
+                                leave=True) 
+
+            for i in progress_bar:
+                indices = permutation[i : i + batch_size]
+                obs_batch = self.bc_obs_all[indices]
+                actions_batch = self.bc_actions_all[indices]
+                current_actual_batch_size = obs_batch.shape[0]
+
+                # --- CRITICAL: Constructing Inputs for your ActorCriticModel ---
+                # Your model expects: model(obs, sliced_memory, memory_mask, memory_indices)
+                # Expert trajectories (s, a) from an MLP agent don't have 'sliced_memory' etc.
+                # We need to provide "dummy" or "default" values for these memory components,
+                # assuming BC focuses on the current observation. This typically means simulating
+                # the state of memory at the beginning of an episode (step 0).
+
+                # 1. Dummy `sliced_memory` (e.g., zeros):
+                #    Shape: (batch_size, memory_length, num_blocks, obs_dim_for_memory)
+                #    The `self.observation_space_dim` is used for `self.memory` in __init__.
+                dummy_sliced_memory = torch.zeros(
+                    current_actual_batch_size, self.memory_length, self.num_blocks, self.observation_space_dim,
+                    device=self.device, dtype=torch.float32
+                )
+
+                # 2. `memory_mask` for step 0:
+                #    `self.memory_mask` is (max_episode_length, memory_length, memory_length)
+                #    Use the mask for the first step of an episode.
+                mask_for_step0 = self.memory_mask[0]  # Shape: (memory_length, memory_length)
+                batch_memory_mask = mask_for_step0.unsqueeze(0).repeat(current_actual_batch_size, 1, 1)
+
+                # 3. `memory_indices` for step 0:
+                #    `self.memory_indices` is (max_episode_length, memory_length)
+                #    Use indices for the first step.
+                indices_for_step0 = self.memory_indices[0] # Shape: (memory_length)
+                batch_memory_indices = indices_for_step0.unsqueeze(0).repeat(current_actual_batch_size, 1)
+                # --- End of Critical Input Construction ---
+
+                policy_distributions_list, _, _ = self.model(
+                    obs_batch, dummy_sliced_memory, batch_memory_mask, batch_memory_indices
+                )
+
+                # Calculate BC loss (Negative Log Likelihood)
+                log_probs = policy_distributions_list[0].log_prob(actions_batch)
+                bc_loss = -log_probs.mean()
+
+                self.optimizer.zero_grad()
+                bc_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.config["max_grad_norm"])
+                self.optimizer.step()
+
+                epoch_total_loss += bc_loss.item()
+                progress_bar.set_postfix({"loss": f"{bc_loss.item():.4f}"})
+            
+            progress_bar.close() # Explicitly close the progress bar for the current epoch
+
+            avg_epoch_loss = epoch_total_loss / num_batches_per_epoch if num_batches_per_epoch > 0 else 0.0
+            # The print statement below will now follow the completed progress bar for the epoch
+            print(f"BC Epoch {epoch + 1}/{epochs} - Avg Loss: {avg_epoch_loss:.4f}") 
+            
+            if wandb.run:
+                 wandb.log({"bc_pretraining/avg_epoch_loss": avg_epoch_loss, "bc_pretraining/epoch": epoch + 1})
+            self.writer.add_scalar("bc_pretraining/avg_epoch_loss", avg_epoch_loss, epoch + 1)
+
+        # Restore original PPO learning rates
+        for i, pg in enumerate(self.optimizer.param_groups):
+            pg["lr"] = original_lrs[i]
+        print("Behavioral Cloning pre-training finished.")
+
+
     def run_training(self) -> None:
         """Runs the entire training logic from sampling data to optimizing the model. Only the final model is saved."""
+        # Check if BC pre-training is enabled and data is loaded
+        bc_train_config = self.config.get("bc_pretraining", {})
+        if bc_train_config.get("enabled", False) and self.bc_obs_all is not None:
+            self._run_bc_pretraining()
+        else:
+            if bc_train_config.get("enabled", False):
+                 print("BC pre-training was enabled but data loading failed. Skipping BC.")
+        
         print("Step 6: Starting training using " + str(self.device))
         # Store episode results for monitoring statistics
         episode_infos = deque(maxlen=100)

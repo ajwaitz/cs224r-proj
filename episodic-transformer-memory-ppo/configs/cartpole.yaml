@@ -35,3 +35,10 @@ clip_range_schedule:
     final: 0.2
     power: 1.0
     max_decay_steps: 300
+
+bc_pretraining:
+  enabled: true  # Set to true to enable BC pre-training
+  expert_data_path: "trajectories/mlp/CartPole-v1__ppo_mlp_expert__mlp__expert_trajectories_1000eps.pkl"
+  epochs: 50                
+  batch_size: 128           
+  learning_rate: 0.0003     

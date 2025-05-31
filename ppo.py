@@ -88,6 +88,9 @@ class Args:
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
 
+    save_path: str = None
+    """the path to save the model weights, if specified. if not, the model weights will not be saved."""
+
 
 def make_env(env_id, idx, capture_video, run_name):
 
@@ -288,6 +291,8 @@ if __name__ == "__main__":
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
                         writer.add_scalar("charts/reward_mean", reward_mean, global_step)
+                        print("logged reward_mean:", reward_mean, "at step", global_step)
+
                         writer.add_scalar("charts/reward_std", reward_std, global_step)
                         writer.add_scalar("charts/length_mean", length_mean, global_step)
                         writer.add_scalar("charts/length_std", length_std, global_step)
@@ -389,3 +394,8 @@ if __name__ == "__main__":
     print('total num eps: ', total_num_eps)
     envs.close()
     writer.close()
+    if args.save_path:
+        torch.save(agent.state_dict(), args.save_path)
+        print(f"Saved model weights to {args.save_path}")
+
+    
