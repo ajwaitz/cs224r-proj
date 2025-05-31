@@ -23,3 +23,7 @@ python ppo_mlp_expert.py \
     --seed 1
 ```
 
+# Run (with pretraining)
+```
+python train.py --config configs/cartpole.yaml --run-id=cartpole-transformer-baseline-2l-mlp
+```
