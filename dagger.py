@@ -118,10 +118,11 @@ if __name__ == "__main__":
   teacher.eval()
   print(f"Loaded expert model from {teacher_path}")
 
-  learner = TTTActor(envs).to(device)
+  obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
+  learner = TTTActor(envs, obs_mask=obs_mask).to(device)
   
   # Move optimizer outside the loop to maintain optimization state
-  optimizer = torch.optim.Adam(learner.parameters(), lr=1e-3)
+  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4)
 
   num_episodes = 1000
 
@@ -170,7 +171,7 @@ if __name__ == "__main__":
     loss.backward()
     optimizer.step()
     
-    if i % 10 == 0:
+    if i % 100 == 0:
         print(f"Episode {i}, DAgger Loss: {loss.item():.4f}")
         rewards = np.stack(rewards, axis=1)
         rewards = rewards.sum(axis=1).mean()
