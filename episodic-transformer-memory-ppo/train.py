@@ -14,13 +14,18 @@ def main():
         --config=<path>            Path to the yaml config file [default: ./configs/poc_memory_env.yaml]
         --run-id=<path>            Specifies the tag for saving the tensorboard summary [default: run].
         --cpu                      Force training on CPU [default: False]
+        --no-wandb                 Disable wandb logging [default: False]
     """
     options = docopt(_USAGE)
     run_id = options["--run-id"]
     cpu = options["--cpu"]
+    no_wandb = options["--no-wandb"]
     # Parse the yaml config file. The result is a dictionary, which is passed to the trainer.
     config = YamlParser(options["--config"]).get_config()
     # config["transformer"]["num_blocks"] = 1
+
+    # Add wandb config to the config dict
+    config["wandb"] = {"enabled": not no_wandb}
 
     # Determine the device to be used for training and set the default tensor type
     if not cpu:

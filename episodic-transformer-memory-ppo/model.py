@@ -58,7 +58,7 @@ class ActorCriticModel(nn.Module):
             dropout=0.1,
             hidden_act="relu",
             max_episode_steps=self.max_episode_length,
-            ttt_layer_type="mlp",
+            ttt_layer_type="linear",
         )
         self.ttt = TTTModel(tttconfig, self.max_episode_length)
 
