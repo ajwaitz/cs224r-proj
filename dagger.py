@@ -45,17 +45,18 @@ class TTTActor(nn.Module):
     self.config = TTTConfig(
             vocab_size=envs.single_observation_space.shape[0],
             hidden_size=intermediate_size,
-            max_position_embeddings=1000,
-            intermediate_size=intermediate_size,
+            max_position_embeddings=500,
+            intermediate_size=intermediate_size * 2,
             num_attention_heads=2,
-            num_hidden_layers=2,
+            num_hidden_layers=4,
             dropout=0.1,
             hidden_act="relu",
-            max_episode_steps=1000,
+            max_episode_steps=500,
             ttt_layer_type="linear",
+            ttt_base_lr=1e-2,
         )
 
-    self.actor = TTTModel(self.config, 1000)
+    self.actor = TTTModel(self.config, 500)
 
     self.head = nn.Linear(intermediate_size, envs.single_action_space.n)
 
@@ -103,7 +104,7 @@ if __name__ == "__main__":
   # np.random.seed(args.seed)
   # torch.manual_seed(args.seed)
   # torch.backends.cudnn.deterministic = args.torch_deterministic
-  batch_size = 4
+  batch_size = 64
 
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   
@@ -121,17 +122,21 @@ if __name__ == "__main__":
   obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
   learner = TTTActor(envs, obs_mask=obs_mask).to(device)
 
-  num_episodes = 1000
+  num_episodes = 2000
+  
+  # Gradient accumulation settings
+  accumulation_steps = 4  # Accumulate gradients over 4 episodes before optimizer step
   
   # Move optimizer outside the loop to maintain optimization state
   optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4, weight_decay=0.0001)
   
   # Add learning rate scheduler
-  scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_episodes, eta_min=1e-6)
+  scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_episodes//accumulation_steps, eta_min=1e-6)
 
   all_rewards = []
   all_seqlens = []
   learning_rates = []  # Track learning rates for plotting
+  accumulated_loss = 0.0
   
   for i in tqdm(range(num_episodes)):
     obs, _ = envs.reset()
@@ -173,24 +178,36 @@ if __name__ == "__main__":
     # TODO perhaps KL divergence might be better here? 
     loss = torch.nn.functional.cross_entropy(learner_logits.view(-1, 2), expert_action_indices.view(-1))
     
-    # Backpropagation
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    # Scale loss by accumulation steps to maintain consistent gradient magnitude
+    loss = loss / accumulation_steps
+    accumulated_loss += loss.item()
     
-    # Update learning rate
-    scheduler.step()
-    learning_rates.append(scheduler.get_last_lr()[0])
+    # Backpropagation (accumulate gradients)
+    loss.backward()
+    
+    # Perform optimizer step only every accumulation_steps episodes
+    if (i + 1) % accumulation_steps == 0:
+      optimizer.step()
+      optimizer.zero_grad()
+      
+      # Update learning rate
+      scheduler.step()
+      learning_rates.append(scheduler.get_last_lr()[0])
+      
+      # Reset accumulated loss
+      accumulated_loss = 0.0
 
     all_seqlens.append(len(rewards))
     rewards = np.stack(rewards, axis=1)
     all_rewards.extend(rewards.sum(axis=1).tolist())
     
     if i % 100 == 0:
-        current_lr = scheduler.get_last_lr()[0]
-        print(f"Episode {i}, DAgger Loss: {loss.item():.4f}, LR: {current_lr:.6f}")
+        current_lr = scheduler.get_last_lr()[0] if learning_rates else 1e-4
+        print(f"Episode {i}, DAgger Loss: {accumulated_loss * accumulation_steps:.4f}, LR: {current_lr:.6f}")
         print(f"Learner return: {sum(all_rewards) / len(all_rewards)}")
         # print(f"Learner seqlen: {sum(all_seqlens) / len(all_seqlens)}")
 
         all_rewards = []
         all_seqlens = []
+
+  
