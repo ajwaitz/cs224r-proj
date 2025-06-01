@@ -120,12 +120,19 @@ if __name__ == "__main__":
 
   obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
   learner = TTTActor(envs, obs_mask=obs_mask).to(device)
-  
-  # Move optimizer outside the loop to maintain optimization state
-  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4)
 
   num_episodes = 1000
+  
+  # Move optimizer outside the loop to maintain optimization state
+  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4, weight_decay=0.0001)
+  
+  # Add learning rate scheduler
+  scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_episodes, eta_min=1e-6)
 
+  all_rewards = []
+  all_seqlens = []
+  learning_rates = []  # Track learning rates for plotting
+  
   for i in tqdm(range(num_episodes)):
     obs, _ = envs.reset()
     obs = torch.Tensor(obs).to(device).unsqueeze(1)
@@ -171,8 +178,19 @@ if __name__ == "__main__":
     loss.backward()
     optimizer.step()
     
+    # Update learning rate
+    scheduler.step()
+    learning_rates.append(scheduler.get_last_lr()[0])
+
+    all_seqlens.append(len(rewards))
+    rewards = np.stack(rewards, axis=1)
+    all_rewards.extend(rewards.sum(axis=1).tolist())
+    
     if i % 100 == 0:
-        print(f"Episode {i}, DAgger Loss: {loss.item():.4f}")
-        rewards = np.stack(rewards, axis=1)
-        rewards = rewards.sum(axis=1).mean()
-        print(f"Learner return: {rewards}")
+        current_lr = scheduler.get_last_lr()[0]
+        print(f"Episode {i}, DAgger Loss: {loss.item():.4f}, LR: {current_lr:.6f}")
+        print(f"Learner return: {sum(all_rewards) / len(all_rewards)}")
+        # print(f"Learner seqlen: {sum(all_seqlens) / len(all_seqlens)}")
+
+        all_rewards = []
+        all_seqlens = []
