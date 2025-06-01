@@ -235,8 +235,22 @@ if __name__ == "__main__":
                         }
                         if ep_return is not None: trajectory["ep_return"] = ep_return
                         if ep_length is not None: trajectory["ep_length"] = ep_length
-                        
-                        expert_trajectories_data.append(trajectory)
+
+                        # Create a version with Python lists for better compatibility
+                        trajectory_lists = {
+                            "observations": [obs.tolist() if hasattr(obs, 'tolist') else list(obs) for obs in episode_observations[i]],
+                            "actions": [int(action) for action in episode_actions[i]],
+                            "rewards": [float(reward) for reward in episode_rewards[i]],
+                            "next_observations": [obs.tolist() if hasattr(obs, 'tolist') else list(obs) for obs in episode_next_observations[i]],
+                            "dones": [bool(done) for done in episode_dones[i]],
+                            "terminated": [bool(terminations_np[i])] * len(episode_observations[i]),
+                            "truncated": [bool(truncations_np[i])] * len(episode_observations[i]),
+                        }
+                        if ep_return is not None: trajectory_lists["ep_return"] = float(ep_return)
+                        if ep_length is not None: trajectory_lists["ep_length"] = int(ep_length)
+                        # trajectory["trajectory_lists"] = trajectory_lists
+
+                        expert_trajectories_data.append(trajectory_lists)
                         episodes_collected_count += 1
                         pbar.update(1)
                         
@@ -292,6 +306,29 @@ if __name__ == "__main__":
     
     with open(output_filename, "wb") as f:
         pickle.dump(expert_trajectories_data, f)
+
+    # Also save as JSON for easier inspection
+    import json
+    
+    # Convert trajectories to JSON-serializable format
+    json_trajectories = []
+    for traj in expert_trajectories_data:
+        json_traj = {
+            "observations": traj["observations"].tolist() if isinstance(traj["observations"], np.ndarray) else traj["observations"],
+            "actions": traj["actions"].tolist() if isinstance(traj["actions"], np.ndarray) else traj["actions"],
+            "rewards": traj["rewards"].tolist() if isinstance(traj["rewards"], np.ndarray) else traj["rewards"],
+            "next_observations": traj["next_observations"].tolist() if isinstance(traj["next_observations"], np.ndarray) else traj["next_observations"],
+            "dones": traj["dones"].tolist() if isinstance(traj["dones"], np.ndarray) else traj["dones"]
+        }
+        json_trajectories.append(json_traj)
+    
+    # Save JSON version
+    json_filename = output_filename.replace(".pkl", ".json")
+    with open(json_filename, "w") as f:
+        json.dump(json_trajectories, f, indent=2)
+    
+    print(f"Also saved trajectories as JSON to {json_filename}")
+
     print(f"\nSaved {len(expert_trajectories_data)} expert trajectories to {output_filename}")
 
     envs.close()
