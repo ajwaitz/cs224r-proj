@@ -8,12 +8,11 @@ from utils import layer_init
 import tyro
 import random
 from tqdm import tqdm
-from ttt_custom import TTTConfig, TTTModel
+from ttt import TTTConfig, TTTModel
 from dagger import TTTActor
 from dagger import make_env
 from dataclasses import dataclass
 import json
-
 
 def load_model(model_path):
     # Set inference device and default tensor type
@@ -25,10 +24,18 @@ def load_model(model_path):
     # Handle both checkpoint dictionaries and direct state dictionaries
     if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
         state_dict = checkpoint['model_state_dict']
-        config = checkpoint['config']
+
+
+        with open(model_path.replace('latest_checkpoint.pth', 'config.json'), 'r') as f:
+            config = json.load(f)
     else:
         state_dict = checkpoint
         config = None
+
+    # for key in list(state_dict.keys()):
+    #     if key.startswith('actor.'):
+    #         new_key = key.replace('actor.', '')
+    #         state_dict[new_key] = state_dict.pop(key)
 
     return state_dict, config
 
@@ -37,15 +44,16 @@ def main(actor):
     done = False
     episode_rewards = []
     t = 0
-    obs = envs.reset()
+    obs, _ = envs.reset()
+    obs = torch.Tensor(obs).to(device).unsqueeze(1)
     traj_obs = None
 
 
     data = {
         "etas": [],
-        "lrs": [],
         "grads": [],
-        "grad_time_fracs": []
+        "grad_time_fracs": [],
+        "lrs": []
     }
 
     while not done:
@@ -66,24 +74,13 @@ def main(actor):
         obs = torch.Tensor(next_obs).to(device).unsqueeze(1)
         t += 1
 
-        
-        etas = actor.actor._get_eta()      
+        data["etas"].append(actor.actor._get_eta().tolist())
+        data["grads"].append(actor.actor._get_gradlists().tolist())
+        data["grad_time_fracs"].append(actor.actor._get_grad_time_fracs())
+        data["lrs"].append(actor.actor._get_lr().tolist())
 
-        lrs = actor.actor._get_lrs()
-
-        grads = actor.actor._get_gradlists()  
-
-        grad_time_fracs = actor.actor._get_grad_time_fracs()
-
-        data["etas"].append(etas)
-        data["lrs"].append(lrs)
-        data["grads"].append(grads)
-        data["grad_time_fracs"].append(grad_time_fracs)
-    
     with open("pleasure_data.json", "w") as f:
-        json.dump(data, f, indent=4)
-
-
+        json.dump(data, f)
 
     print(f"Episode rewards: {episode_rewards}")
     print(f"Episode length: {t}")
@@ -103,7 +100,6 @@ if __name__ == "__main__":
     batch_size = 1 # (for test-time)
     state_dict, config = load_model(config.model)
 
-
     # set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -111,8 +107,9 @@ if __name__ == "__main__":
         [make_env("CartPole-v1", i, False, "CartPole-v1") for i in range(batch_size)]
     )
 
-    matryoshka_actor = TTTActor(envs, intermediate_size=64, obs_mask=None)
-    matryoshka_actor.actor.load_state_dict(state_dict)
+    obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
+    matryoshka_actor = TTTActor(envs, intermediate_size=64, obs_mask=obs_mask)
+    matryoshka_actor.load_state_dict(state_dict)
 
     matryoshka_actor.eval()
 

@@ -837,6 +837,7 @@ class TTTBase(nn.Module):
         else:
             mini_batch_step_offset = 0
         token_eta, ttt_lr_eta = self.get_eta(X, mini_batch_step_offset, mini_batch_size)
+        #print('ttt_lr_shape: ', ttt_lr_eta.shape)
         eta = token_eta * ttt_lr_eta
         # decouple token_coeff and ilr_coeff for decoding
         inputs = {
@@ -1334,7 +1335,7 @@ class Block(nn.Module):
         else:
             raise ValueError(f"Invalid ttt_layer_type: {config.ttt_layer_type}")
 
-        self.seq_modeling_block = ttt_layer(config=config, layer_idx=layer_idx, dump=True)
+        self.seq_modeling_block = ttt_layer(config=config, layer_idx=layer_idx)
 
         self.mlp = SwiGluMLP(config)
         if self.pre_conv:
@@ -1467,20 +1468,34 @@ class TTTModel(TTTPreTrainedModel):
     def _get_lr(self):
         lrs = []
         for block in self.layers:
-            lr = block.seq_modeling_block._get_lr()
+            lr = block.seq_modeling_block._get_lrs()
 
             lrs.append(lr)
 
         # both of shape
-        # [B, num_layers, num_heads, nuem_mini_batch, 1, mini_batch_size]
-        lrs = torch.stack(lrs, dim=1)
+        # [num_layers, B, num_heads, nuem_mini_batch, 1, mini_batch_size]
+        lrs = torch.stack(lrs, dim=0)
+        return lrs
     
-    def _get_etas(self):
+    def _get_eta(self):
         etas = []
         for block in self.layers:
             eta = block.seq_modeling_block._get_etas()
 
             etas.append(eta)
+
+        # both of shape
+        # [num_layers, B, num_heads, nuem_mini_batch, 1, mini_batch_size]
+        etas = torch.stack(etas, dim=0)
+
+        # [num_layers, B, num_heads, nuem_mini_batch, mini_batch_size]
+        etas = etas.squeeze(-2)
+        
+        # [num_layers, B, num_heads, seqlen]
+        etas = etas.view(etas.shape[0], etas.shape[1], etas.shape[2], -1)
+
+        # [B, num_layers, seqlen, num_heads]
+        etas = etas.transpose(1, 2).transpose(-1, -2)
 
         return etas
     
@@ -1491,6 +1506,11 @@ class TTTModel(TTTPreTrainedModel):
 
             gradlists.append(grads)
 
+        for i in range(len(gradlists)):
+            gradlists[i] = torch.stack(gradlists[i])
+        gradlists = torch.stack(gradlists)
+
+        # shape is [num_layers, pos in seq, ...]
         return gradlists
     
     def _get_grad_time_fracs(self):
@@ -1500,6 +1520,7 @@ class TTTModel(TTTPreTrainedModel):
 
             grad_time_fracs.append(grad_time_frac)
 
+        # list of floats
         return grad_time_fracs
 
     def forward(
