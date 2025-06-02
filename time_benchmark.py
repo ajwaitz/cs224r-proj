@@ -59,13 +59,13 @@ def main(actor):
         traj_obs = None
 
 
-        data = {
-            "etas": [],
-            "grads": [],
-            "grad_time_fracs": [],
-            "lrs": [],
-            "total_time": []
-        }
+        # data = {
+        #     "etas": [],
+        #     "grads": [],
+        #     "grad_time_fracs": [],
+        #     "lrs": [],
+        #     "total_time": []
+        # }
 
         start_time = time.time()
         while not done:
@@ -86,11 +86,11 @@ def main(actor):
             obs = torch.Tensor(next_obs).to(device).unsqueeze(1)
             t += 1
 
-            data["etas"].append(actor.actor._get_eta().tolist())
-            data["grads"].append(actor.actor._get_gradlists().tolist())
-            data["grad_time_fracs"].append(actor.actor._get_grad_time_fracs())
-            data["lrs"].append(actor.actor._get_lr().tolist())
-            data["total_time"].append(actor.actor._get_time_forward())
+            # data["etas"].append(actor.actor._get_eta().tolist())
+            # data["grads"].append(actor.actor._get_gradlists().tolist())
+            # data["grad_time_fracs"].append(actor.actor._get_grad_time_fracs())
+            # data["lrs"].append(actor.actor._get_lr().tolist())
+            # data["total_time"].append(actor.actor._get_time_forward())
 
         tf = (time.time() - start_time) / t
         print(f"Trial completed in {tf} seconds per timestep")
