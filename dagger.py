@@ -57,6 +57,7 @@ class TTTActor(nn.Module):
             ttt_layer_type="linear",
             ttt_base_lr=1e-2,
             min_episode_steps=8,
+            mini_batch_size=8
         )
 
     self.actor = TTTModel(self.config, 500)
@@ -125,7 +126,7 @@ if __name__ == "__main__":
   obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
   learner = TTTActor(envs, obs_mask=obs_mask).to(device)
 
-  num_episodes = 4000
+  num_episodes = 1500
   
   # Gradient accumulation settings
   accumulation_steps = 2  # Accumulate gradients over 4 episodes before optimizer step
@@ -204,7 +205,21 @@ if __name__ == "__main__":
   learning_rates = []  # Track learning rates for plotting
   accumulated_loss = 0.0
   
-  for i in tqdm(range(num_episodes)):
+  # Resume from checkpoint if specified
+  if resume_from_checkpoint and os.path.exists(resume_from_checkpoint):
+    print(f"Resuming from checkpoint: {resume_from_checkpoint}")
+    checkpoint = torch.load(resume_from_checkpoint, map_location=device)
+    learner.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    start_episode = checkpoint['episode']
+    all_rewards = checkpoint.get('all_rewards', [])
+    all_seqlens = checkpoint.get('all_seqlens', [])
+    learning_rates = checkpoint.get('learning_rates', [])
+    accumulated_loss = checkpoint.get('accumulated_loss', 0.0)
+    print(f"Resumed from episode {start_episode}")
+  
+  for i in tqdm(range(start_episode, num_episodes)):
     obs, _ = envs.reset()
     obs = torch.Tensor(obs).to(device).unsqueeze(1)
     done = False
@@ -285,5 +300,35 @@ if __name__ == "__main__":
 
         all_rewards = []
         all_seqlens = []
-
+    
+    # Save checkpoint at regular intervals
+    if (i + 1) % checkpoint_interval == 0:
+      checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_episode_{i+1}.pth")
+      checkpoint = {
+        'episode': i + 1,
+        'model_state_dict': learner.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'accumulated_loss': accumulated_loss,
+        'all_rewards': all_rewards,
+        'all_seqlens': all_seqlens,
+        'learning_rates': learning_rates,
+        'config': config
+      }
+      torch.save(checkpoint, checkpoint_path)
+      print(f"Checkpoint saved at episode {i+1}: {checkpoint_path}")
+      
+      # Also save as latest checkpoint for easy resuming
+      latest_checkpoint_path = os.path.join(checkpoint_dir, "latest_checkpoint.pth")
+      torch.save(checkpoint, latest_checkpoint_path)
+  
+  # Save final model
+  final_model_path = os.path.join(checkpoint_dir, "final_model.pth")
+  torch.save({
+    'model_state_dict': learner.state_dict(),
+    'config': config,
+    'episode': num_episodes,
+    'learning_rates': learning_rates
+  }, final_model_path)
+  print(f"Final model saved: {final_model_path}")
   

@@ -53,7 +53,8 @@ def main(actor):
         "etas": [],
         "grads": [],
         "grad_time_fracs": [],
-        "lrs": []
+        "lrs": [],
+        "total_time": []
     }
 
     while not done:
@@ -78,6 +79,7 @@ def main(actor):
         data["grads"].append(actor.actor._get_gradlists().tolist())
         data["grad_time_fracs"].append(actor.actor._get_grad_time_fracs())
         data["lrs"].append(actor.actor._get_lr().tolist())
+        data["total_time"].append(actor.actor._get_time_forward())
 
     with open("pleasure_data.json", "w") as f:
         json.dump(data, f)
@@ -101,7 +103,8 @@ if __name__ == "__main__":
     state_dict, config = load_model(config.model)
 
     # set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
 
     envs = gym.vector.SyncVectorEnv(
         [make_env("CartPole-v1", i, False, "CartPole-v1") for i in range(batch_size)]

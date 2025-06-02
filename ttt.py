@@ -992,10 +992,9 @@ class TTTLinear(TTTBase):
         # since we need store the gradient for the next mini-batch computation
         use_dual_form = cache_params is None or mini_batch_size % self.mini_batch_size == 0
         
+        # use_dual_form = False
 
 
-        def skip_criteria():
-            return False
 
 
         def compute_mini_batch(params_dict, inputs):
@@ -1026,7 +1025,18 @@ class TTTLinear(TTTBase):
             # (batch size, num_heads, mini_batch_size, head_dim)
             grad_l_wrt_Z1 = ln_fused_l2_bwd(Z1, reconstruction_target, ln_weight, ln_bias)
 
+            def skip_criteria():
+                return False
+                # try learning rate skip
 
+                eta = eta_mini_batch[0, :, :, 0]
+                # average over mini-batch
+                eta = torch.mean(eta, dim=-1)
+                # average over heads
+                eta = torch.mean(eta, dim=0)
+                # if eta is too small, we skip the gradient update
+                return torch.all(eta < 0.00007)
+            
             self._grads.append(grad_l_wrt_Z1)
 
             start_time = time.time()
@@ -1036,6 +1046,7 @@ class TTTLinear(TTTBase):
 
             if not skip_criteria():
 
+                
                 if use_dual_form:
                     # [B,nh,K,K]
                     Attn1 = torch.tril(XQ_mini_batch @ X1.transpose(-2, -1))
@@ -1080,6 +1091,7 @@ class TTTLinear(TTTBase):
                     grad_W1_last = grad_W1[:, :, -1]
                     grad_b1_last = grad_b1[:, :, -1:]
             else:
+                # print('skipping gradient update')
                 # we skip, so don't do the gradient updates
                 # if use_dual_form:
                 b1_bar = b1_init
@@ -1550,6 +1562,16 @@ class TTTModel(TTTPreTrainedModel):
 
         # list of floats
         return grad_time_fracs
+
+    def _get_time_forward(self):
+        time_forward = []
+        for block in self.layers:
+            time_fwd = block.seq_modeling_block._get_time_forward()
+
+            time_forward.append(time_fwd)
+
+        # list of floats
+        return time_forward
 
     def forward(
         self,
