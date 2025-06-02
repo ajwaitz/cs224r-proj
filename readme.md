@@ -32,3 +32,11 @@ python train.py --config configs/cartpole.yaml --run-id=cartpole-transformer-bas
 ```
 python train.py --config configs/cartpole.yaml --run-id=test-no-wandb --no-wandb
 ```
+
+
+# Run (test-time)
+```
+python pleasure.py --model ./checkpoints_1/latest_checkpoint.pth
+```
+
+use investigate\_pleasure to visualize results
