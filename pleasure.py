@@ -11,12 +11,27 @@ from tqdm import tqdm
 from ttt_custom import TTTConfig, TTTModel
 from dagger import TTTActor
 from dagger import make_env
+from dataclasses import dataclass
+
 
 def load_model(model_path):
+    # Set inference device and default tensor type
+    device = torch.device("cpu")
+    torch.set_default_tensor_type("torch.FloatTensor")
+
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     state_dict = checkpoint['model_state_dict']
     config = checkpoint['config']
-    return state_dict, config
+    
+    # Strip 'ttt.' prefix from keys
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith('ttt.'):
+            new_state_dict[k[4:]] = v
+        else:
+            new_state_dict[k] = v
+    
+    return new_state_dict, config
 
 
 def main(actor):
@@ -49,16 +64,18 @@ def main(actor):
     print(f"Episode reward std: {np.std(episode_rewards)}")
 
 
+@dataclass
+class PleasureConfig:
+    model: str
+    # batch_size: int = 1
+
 if __name__ == "__main__":
     # parse command line arguments
-    args = tyro.cli(main)
+    config = tyro.cli(PleasureConfig)
 
-    model_path = args.model
-    batch_size = 1 # (run it on one env at test time)
-    if args.batch_size:
-        batch_size = args.batch_size
+    batch_size = 1 # (for test-time)
+    state_dict, config = load_model(config.model)
 
-    state_dict, config = load_model(model_path)
 
     # set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
