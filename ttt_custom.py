@@ -628,6 +628,8 @@ class TTTBase(nn.Module):
         self._init_ttt_lr_gate()
         self._init_ttt_ln()
 
+        self.etas = None # (tensor of batch_size, )
+
         # use gating as in Mamba backbone
         self.use_gate = config.use_gate
         if self.use_gate:
@@ -912,6 +914,12 @@ class TTTBase(nn.Module):
         output_hidden_states = self.o_proj(output_hidden_states)
 
         return output_hidden_states
+    
+    def get_etas(self):
+        pass
+
+    def get_grads(self):
+        pass
 
 
 class TTTLinear(TTTBase):
@@ -971,8 +979,13 @@ class TTTLinear(TTTBase):
             ln_weight = self.ttt_norm_weight.reshape(self.num_heads, 1, self.head_dim)
             ln_bias = self.ttt_norm_bias.reshape(self.num_heads, 1, self.head_dim)
             # [B,nh,K,f]
+
+            # TODO: these should be the grads we care about (also one in MLP version)
             grad_l_wrt_Z1 = ln_fused_l2_bwd(Z1, reconstruction_target, ln_weight, ln_bias)
 
+
+            # can skip this if/else block if we wish to capitalize on no grad at 
+            # maybe we should also be doing this at train-time
             if use_dual_form:
                 # [B,nh,K,K]
                 Attn1 = torch.tril(XQ_mini_batch @ X1.transpose(-2, -1))

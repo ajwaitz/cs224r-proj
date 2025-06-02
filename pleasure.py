@@ -20,18 +20,16 @@ def load_model(model_path):
     torch.set_default_tensor_type("torch.FloatTensor")
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    state_dict = checkpoint['model_state_dict']
-    config = checkpoint['config']
     
-    # Strip 'ttt.' prefix from keys
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith('ttt.'):
-            new_state_dict[k[4:]] = v
-        else:
-            new_state_dict[k] = v
-    
-    return new_state_dict, config
+    # Handle both checkpoint dictionaries and direct state dictionaries
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+        config = checkpoint['config']
+    else:
+        state_dict = checkpoint
+        config = None
+
+    return state_dict, config
 
 
 def main(actor):
