@@ -9,6 +9,8 @@ import tyro
 import random
 from tqdm import tqdm
 from ttt_custom import TTTConfig, TTTModel
+import os
+import json
 
 class MLPAgent(nn.Module):
   def __init__(self, envs, intermediate_size=64):
@@ -128,22 +130,161 @@ if __name__ == "__main__":
   accumulation_steps = 4  # Accumulate gradients over 4 episodes before optimizer step
   
   # Move optimizer outside the loop to maintain optimization state
-  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4, weight_decay=0.0001)
+  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-3, weight_decay=0.0001)
   
   # Add learning rate scheduler
   scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_episodes//accumulation_steps, eta_min=1e-6)
 
+  # Checkpointing setup
+  checkpoint_dir = "checkpoints"
+  os.makedirs(checkpoint_dir, exist_ok=True)
+  checkpoint_interval = 500  # Save checkpoint every 500 episodes
+  resume_from_checkpoint = None  # Set to checkpoint path to resume training
+  
+  # Save configuration
+  config = {
+    'training': {
+      'num_episodes': num_episodes,
+      'batch_size': batch_size,
+      'accumulation_steps': accumulation_steps,
+      'checkpoint_interval': checkpoint_interval,
+      'expert_trajectory_prob': 0.1,
+    },
+    'model': {
+      'learner_type': 'TTTActor',
+      'intermediate_size': 64,
+      'obs_mask': [1, 0, 1, 0],  # position and velocity masked
+    },
+    'ttt_config': {
+      'vocab_size': envs.single_observation_space.shape[0],
+      'hidden_size': 64,
+      'max_position_embeddings': 500,
+      'intermediate_size': 128,
+      'num_attention_heads': 2,
+      'num_hidden_layers': 4,
+      'dropout': 0.1,
+      'hidden_act': 'relu',
+      'max_episode_steps': 500,
+      'ttt_layer_type': 'linear',
+      'ttt_base_lr': 1e-2,
+    },
+    'optimizer': {
+      'type': 'AdamW',
+      'lr': 1e-3,
+      'weight_decay': 0.0001,
+    },
+    'scheduler': {
+      'type': 'CosineAnnealingLR',
+      'T_max': num_episodes // accumulation_steps,
+      'eta_min': 1e-6,
+    },
+    'environment': {
+      'env_id': 'CartPole-v1',
+      'observation_space_shape': list(envs.single_observation_space.shape),
+      'action_space_n': envs.single_action_space.n,
+    },
+    'expert': {
+      'model_path': teacher_path,
+      'model_type': 'MLPAgent',
+    },
+    'device': str(device),
+  }
+  
+  # Save config to checkpoint directory
+  config_path = os.path.join(checkpoint_dir, "config.json")
+  with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+  print(f"Configuration saved to {config_path}")
+  
+  # Initialize training state
+  start_episode = 0
   all_rewards = []
   all_seqlens = []
   learning_rates = []  # Track learning rates for plotting
   accumulated_loss = 0.0
   
-  for i in tqdm(range(num_episodes)):
+  # Function to save checkpoint
+  def save_checkpoint(episode, model, optimizer, scheduler, all_rewards, all_seqlens, learning_rates, accumulated_loss):
+    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_episode_{episode}.pth")
+    checkpoint = {
+      'episode': episode,
+      'model_state_dict': model.state_dict(),
+      'optimizer_state_dict': optimizer.state_dict(),
+      'scheduler_state_dict': scheduler.state_dict(),
+      'all_rewards': all_rewards,
+      'all_seqlens': all_seqlens,
+      'learning_rates': learning_rates,
+      'accumulated_loss': accumulated_loss,
+      'random_state': random.getstate(),
+      'numpy_random_state': np.random.get_state(),
+      'torch_random_state': torch.get_rng_state(),
+    }
+    torch.save(checkpoint, checkpoint_path)
+    print(f"Checkpoint saved at {checkpoint_path}")
+    
+    # Also save as latest checkpoint
+    latest_path = os.path.join(checkpoint_dir, "latest_checkpoint.pth")
+    torch.save(checkpoint, latest_path)
+    
+    # Save training metadata
+    metadata = {
+      'episode': episode,
+      'num_episodes': num_episodes,
+      'batch_size': batch_size,
+      'accumulation_steps': accumulation_steps,
+      'checkpoint_interval': checkpoint_interval,
+    }
+    with open(os.path.join(checkpoint_dir, "training_metadata.json"), 'w') as f:
+      json.dump(metadata, f, indent=2)
+  
+  # Function to load checkpoint
+  def load_checkpoint(checkpoint_path, model, optimizer, scheduler):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    
+    # Restore random states for reproducibility
+    random.setstate(checkpoint['random_state'])
+    np.random.set_state(checkpoint['numpy_random_state'])
+    torch.set_rng_state(checkpoint['torch_random_state'])
+    
+    return (checkpoint['episode'], checkpoint['all_rewards'], checkpoint['all_seqlens'], 
+            checkpoint['learning_rates'], checkpoint['accumulated_loss'])
+  
+  # Resume from checkpoint if specified
+  if resume_from_checkpoint:
+    if os.path.exists(resume_from_checkpoint):
+      print(f"Resuming training from {resume_from_checkpoint}")
+      start_episode, all_rewards, all_seqlens, learning_rates, accumulated_loss = load_checkpoint(
+        resume_from_checkpoint, learner, optimizer, scheduler
+      )
+      print(f"Resumed from episode {start_episode}")
+    else:
+      print(f"Checkpoint file {resume_from_checkpoint} not found. Starting from scratch.")
+  
+  # Check for latest checkpoint if no specific checkpoint specified
+  elif os.path.exists(os.path.join(checkpoint_dir, "latest_checkpoint.pth")):
+    latest_checkpoint = os.path.join(checkpoint_dir, "latest_checkpoint.pth")
+    print(f"Found latest checkpoint: {latest_checkpoint}")
+    response = input("Resume from latest checkpoint? (y/n): ").lower().strip()
+    if response == 'y':
+      start_episode, all_rewards, all_seqlens, learning_rates, accumulated_loss = load_checkpoint(
+        latest_checkpoint, learner, optimizer, scheduler
+      )
+      print(f"Resumed from episode {start_episode}")
+  
+  for i in tqdm(range(start_episode, num_episodes)):
     obs, _ = envs.reset()
     obs = torch.Tensor(obs).to(device).unsqueeze(1)
     done = False
     trajectory_obs = None
     rewards = []
+
+    expert_trajectory = False
+    # sometimes sample expert trajectories
+    if np.random.random() < 0.1:
+        expert_trajectory = True
     
     # sample a trajectory 
     while not done:
@@ -154,11 +295,14 @@ if __name__ == "__main__":
       
       with torch.no_grad():
         # unsqueeze is to add singleton batch dim
-        action, _, _, _ = learner.get_action_and_value(trajectory_obs)
+        if expert_trajectory:
+          action, _, _, _ = teacher.get_action_and_value(trajectory_obs)
+        else:
+          action, _, _, _ = learner.get_action_and_value(trajectory_obs)
         action = action[:, -1:]
       
       next_obs, reward, termination, truncation, info = envs.step(action.flatten().cpu().numpy())
-      # Fix the IndexError by properly handling the boolean arrays
+
       done = termination.any() or truncation.any()
       rewards.append(reward)
       obs = torch.Tensor(next_obs).to(device).unsqueeze(1)
@@ -201,6 +345,10 @@ if __name__ == "__main__":
     rewards = np.stack(rewards, axis=1)
     all_rewards.extend(rewards.sum(axis=1).tolist())
     
+    # Save checkpoint periodically
+    if (i + 1) % checkpoint_interval == 0:
+      save_checkpoint(i + 1, learner, optimizer, scheduler, all_rewards, all_seqlens, learning_rates, accumulated_loss)
+    
     if i % 100 == 0:
         current_lr = scheduler.get_last_lr()[0] if learning_rates else 1e-4
         print(f"Episode {i}, DAgger Loss: {accumulated_loss * accumulation_steps:.4f}, LR: {current_lr:.6f}")
@@ -210,4 +358,7 @@ if __name__ == "__main__":
         all_rewards = []
         all_seqlens = []
 
-  
+  # Save final checkpoint
+  save_checkpoint(num_episodes, learner, optimizer, scheduler, all_rewards, all_seqlens, learning_rates, accumulated_loss)
+  print("Training completed. Final checkpoint saved.")
+ 
