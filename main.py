@@ -1,7 +1,7 @@
 import torch
 import gymnasium as gym
 from ttt import TTTModel, TTTConfig
-from transformers import LlamaForCausalLM, LlamaConfig
+from _transformers import LlamaForCausalLM, LlamaConfig
 
 def build_mlp(input_size: int, hidden_size: int, output_size: int):
   return torch.nn.Sequential(

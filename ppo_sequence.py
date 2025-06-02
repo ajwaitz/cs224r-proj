@@ -18,7 +18,7 @@ import torch.optim as optim
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-from transformers.transformeragent import TransformerAgent
+from _transformers.transformeragent import TransformerAgent
 from utils import layer_init
 @dataclass
 class Args:

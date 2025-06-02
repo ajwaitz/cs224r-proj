@@ -9,7 +9,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.utils._pytree import tree_map
 
-from transformers import PretrainedConfig
+from _transformers import PretrainedConfig
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,

@@ -9,6 +9,8 @@ import tyro
 import random
 from tqdm import tqdm
 from ttt import TTTConfig, TTTModel
+import os
+import json
 
 class MLPAgent(nn.Module):
   def __init__(self, envs, intermediate_size=64):
@@ -54,6 +56,7 @@ class TTTActor(nn.Module):
             max_episode_steps=500,
             ttt_layer_type="linear",
             ttt_base_lr=1e-2,
+            min_episode_steps=8,
         )
 
     self.actor = TTTModel(self.config, 500)
@@ -122,17 +125,80 @@ if __name__ == "__main__":
   obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
   learner = TTTActor(envs, obs_mask=obs_mask).to(device)
 
-  num_episodes = 2000
+  num_episodes = 4000
   
   # Gradient accumulation settings
-  accumulation_steps = 4  # Accumulate gradients over 4 episodes before optimizer step
+  accumulation_steps = 2  # Accumulate gradients over 4 episodes before optimizer step
   
   # Move optimizer outside the loop to maintain optimization state
-  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4, weight_decay=0.0001)
+  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-3, weight_decay=1e-5)
   
   # Add learning rate scheduler
   scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_episodes//accumulation_steps, eta_min=1e-6)
 
+  # Checkpointing setup
+  checkpoint_dir = "checkpoints"
+  os.makedirs(checkpoint_dir, exist_ok=True)
+  checkpoint_interval = 500  # Save checkpoint every 500 episodes
+  resume_from_checkpoint = None  # Set to checkpoint path to resume training
+  
+  # Save configuration
+  config = {
+    'training': {
+      'num_episodes': int(num_episodes),
+      'batch_size': int(batch_size),
+      'accumulation_steps': int(accumulation_steps),
+      'checkpoint_interval': int(checkpoint_interval),
+      'expert_trajectory_prob': 0.1,
+    },
+    'model': {
+      'learner_type': 'TTTActor',
+      'intermediate_size': 64,
+      'obs_mask': [1, 0, 1, 0],  # position and velocity masked
+    },
+    'ttt_config': {
+      'vocab_size': int(envs.single_observation_space.shape[0]),
+      'hidden_size': 64,
+      'max_position_embeddings': 500,
+      'intermediate_size': 128,
+      'num_attention_heads': 2,
+      'num_hidden_layers': 4,
+      'dropout': 0.1,
+      'hidden_act': 'relu',
+      'max_episode_steps': 500,
+      'ttt_layer_type': 'linear',
+      'ttt_base_lr': 1e-2,
+    },
+    'optimizer': {
+      'type': 'AdamW',
+      'lr': 1e-3,
+      'weight_decay': 0.0001,
+    },
+    'scheduler': {
+      'type': 'CosineAnnealingLR',
+      'T_max': int(num_episodes // accumulation_steps),
+      'eta_min': 1e-6,
+    },
+    'environment': {
+      'env_id': 'CartPole-v1',
+      'observation_space_shape': [int(x) for x in envs.single_observation_space.shape],
+      'action_space_n': int(envs.single_action_space.n),
+    },
+    'expert': {
+      'model_path': teacher_path,
+      'model_type': 'MLPAgent',
+    },
+    'device': str(device),
+  }
+  
+  # Save config to checkpoint directory
+  config_path = os.path.join(checkpoint_dir, "config.json")
+  with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+  print(f"Configuration saved to {config_path}")
+  
+  # Initialize training state
+  start_episode = 0
   all_rewards = []
   all_seqlens = []
   learning_rates = []  # Track learning rates for plotting
@@ -144,6 +210,11 @@ if __name__ == "__main__":
     done = False
     trajectory_obs = None
     rewards = []
+
+    expert_trajectory = False
+    # sometimes sample expert trajectories
+    if np.random.random() < (1 - i / num_episodes):
+        expert_trajectory = True
     
     # sample a trajectory 
     while not done:

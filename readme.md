@@ -27,3 +27,8 @@ python ppo_mlp_expert.py \
 ```
 python train.py --config configs/cartpole.yaml --run-id=cartpole-transformer-baseline-2l-mlp
 ```
+
+# Run without WandB logging
+```
+python train.py --config configs/cartpole.yaml --run-id=test-no-wandb --no-wandb
+```
