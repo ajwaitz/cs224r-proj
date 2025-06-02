@@ -8,10 +8,11 @@ from utils import layer_init
 import tyro
 import random
 from tqdm import tqdm
-from ttt import TTTConfig, TTTModel
+from ttt_custom import TTTConfig, TTTModel
 from dagger import TTTActor
 from dagger import make_env
 from dataclasses import dataclass
+import json
 
 
 def load_model(model_path):
@@ -38,6 +39,15 @@ def main(actor):
     t = 0
     obs = envs.reset()
     traj_obs = None
+
+
+    data = {
+        "etas": [],
+        "lrs": [],
+        "grads": [],
+        "grad_time_fracs": []
+    }
+
     while not done:
         if traj_obs is None:
             traj_obs = obs.clone()
@@ -55,7 +65,26 @@ def main(actor):
         episode_rewards.append(reward)
         obs = torch.Tensor(next_obs).to(device).unsqueeze(1)
         t += 1
+
+        
+        etas = actor.actor._get_eta()      
+
+        lrs = actor.actor._get_lrs()
+
+        grads = actor.actor._get_gradlists()  
+
+        grad_time_fracs = actor.actor._get_grad_time_fracs()
+
+        data["etas"].append(etas)
+        data["lrs"].append(lrs)
+        data["grads"].append(grads)
+        data["grad_time_fracs"].append(grad_time_fracs)
     
+    with open("pleasure_data.json", "w") as f:
+        json.dump(data, f, indent=4)
+
+
+
     print(f"Episode rewards: {episode_rewards}")
     print(f"Episode length: {t}")
     print(f"Episode reward mean: {np.mean(episode_rewards)}")

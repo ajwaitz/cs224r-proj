@@ -18,6 +18,7 @@ from transformers.modeling_outputs import (
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
 from transformers.utils.import_utils import is_causal_conv1d_available
+import time
 
 if is_causal_conv1d_available():
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -597,10 +598,15 @@ class TTTCache:
         return {name: self.ttt_params_dict[name][layer_idx] for name in self.ttt_params_dict}
 
 class TTTBase(nn.Module):
-    def __init__(self, config: TTTConfig, layer_idx: Optional[int] = None):
+    def __init__(self, config: TTTConfig, layer_idx: Optional[int] = None, dump: bool = False):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
+        self.dump = dump
+
+        self.time_spent_grad = 0.0
+        self.time_spent_forward_total = 0.0
+
         if layer_idx is None:
             logger.warning_once(
                 f"Instantiating {self.__class__.__name__} without passing a `layer_idx` is not recommended and will "
@@ -628,7 +634,8 @@ class TTTBase(nn.Module):
         self._init_ttt_lr_gate()
         self._init_ttt_ln()
 
-        self.etas = None # (tensor of batch_size, )
+        self._eta = None # (tensor of batch_size, )
+        self._lr = None
 
         # use gating as in Mamba backbone
         self.use_gate = config.use_gate
@@ -785,6 +792,9 @@ class TTTBase(nn.Module):
         ttt_lr = ttt_lr.permute(0, 1, 2, 4, 3)
         ttt_lr_eta = self.config.ttt_base_lr * ttt_lr / self.head_dim
 
+        self._lr = ttt_lr.clone()
+        self._eta = ttt_lr_eta.clone()
+        self._grads = []
         # [B, L]
         token_idx = self.token_idx + self.learnable_token_idx
         token_idx = token_idx[mini_batch_step_offset : mini_batch_step_offset + mini_batch_size]
@@ -855,6 +865,10 @@ class TTTBase(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         cache_params: Optional[TTTCache] = None,
     ):
+        
+        self._grads = [] # reset at the start of each forward pass
+        self.time_spent_forward_total = 0.0 # reset time spent in forward pass
+        start_time = time.time()
         B, L = hidden_states.shape[:2]
         reminder_len = L % self.mini_batch_size
         num_mini_batch = L // self.mini_batch_size
@@ -878,6 +892,7 @@ class TTTBase(nn.Module):
         # when input sequence length is not a multiple of mini_batch_size
         # we need to compute them seperately, when computing the reminder,
         # we will need the last_mini_batch_params_dict to continue TTT learning
+
         if num_mini_batch > 0:
             inputs = {
                 "XQ": XQ[:, :, : num_mini_batch * self.mini_batch_size],
@@ -913,14 +928,26 @@ class TTTBase(nn.Module):
             output_hidden_states = self.apply_gate(hidden_states, output_hidden_states)
         output_hidden_states = self.o_proj(output_hidden_states)
 
+        self.time_spent_forward_total = time.time() - start_time
         return output_hidden_states
     
-    def get_etas(self):
-        pass
+    def _get_etas(self):
+        return self._eta
 
-    def get_grads(self):
-        pass
+    def _get_lrs(self):
+        return self._lr
 
+    def _get_grads(self):
+        return self._grads
+
+    def _get_time_forward(self):
+        return self.time_spent_forward_total
+    
+    def _get_time_grad(self):
+        return self.time_spent_grad
+    
+    def _get_grad_time_frac(self):
+        return self.time_spent_grad / self.time_spent_forward_total if self.time_spent_forward_total > 0 else 0.0
 
 class TTTLinear(TTTBase):
     def __init__(self, config: TTTConfig, layer_idx: Optional[int] = None):
@@ -955,7 +982,7 @@ class TTTLinear(TTTBase):
         # we need to use primal form if mini_batch_size is not a multiple of self.mini_batch_size
         # since we need store the gradient for the next mini-batch computation
         use_dual_form = cache_params is None or mini_batch_size % self.mini_batch_size == 0
-
+        
         def compute_mini_batch(params_dict, inputs):
             # [B, nh, f, f], nh=num_heads, f=head_dim
             W1_init = params_dict["W1_states"]
@@ -983,6 +1010,10 @@ class TTTLinear(TTTBase):
             # TODO: these should be the grads we care about (also one in MLP version)
             grad_l_wrt_Z1 = ln_fused_l2_bwd(Z1, reconstruction_target, ln_weight, ln_bias)
 
+
+            self._grads.append(grad_l_wrt_Z1)
+
+            start_time = time.time()
 
             # can skip this if/else block if we wish to capitalize on no grad at 
             # maybe we should also be doing this at train-time
@@ -1030,6 +1061,8 @@ class TTTLinear(TTTBase):
                 grad_W1_last = grad_W1[:, :, -1]
                 grad_b1_last = grad_b1[:, :, -1:]
 
+            self.time_spent_grad += time.time() - start_time
+
             Z1_bar = ln_fwd(Z1_bar, ln_weight, ln_bias)
 
             XQW_mini_batch = XQ_mini_batch + Z1_bar
@@ -1061,6 +1094,9 @@ class TTTLinear(TTTBase):
             device=device,
             dtype=dtype,
         )
+
+        self.time_spent_grad = 0.0
+
         # XQW_batch: [num_mini_batch, B, num_heads, mini_batch_size, head_dim]
         batch_params_dict, XQW_batch = scan(
             compute_mini_batch,
@@ -1298,7 +1334,7 @@ class Block(nn.Module):
         else:
             raise ValueError(f"Invalid ttt_layer_type: {config.ttt_layer_type}")
 
-        self.seq_modeling_block = ttt_layer(config=config, layer_idx=layer_idx)
+        self.seq_modeling_block = ttt_layer(config=config, layer_idx=layer_idx, dump=True)
 
         self.mlp = SwiGluMLP(config)
         if self.pre_conv:
@@ -1427,6 +1463,44 @@ class TTTModel(TTTPreTrainedModel):
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
+
+    def _get_lr(self):
+        lrs = []
+        for block in self.layers:
+            lr = block.seq_modeling_block._get_lr()
+
+            lrs.append(lr)
+
+        # both of shape
+        # [B, num_layers, num_heads, nuem_mini_batch, 1, mini_batch_size]
+        lrs = torch.stack(lrs, dim=1)
+    
+    def _get_etas(self):
+        etas = []
+        for block in self.layers:
+            eta = block.seq_modeling_block._get_etas()
+
+            etas.append(eta)
+
+        return etas
+    
+    def _get_gradlists(self):
+        gradlists = []
+        for block in self.layers:
+            grads = block.seq_modeling_block._get_grads()
+
+            gradlists.append(grads)
+
+        return gradlists
+    
+    def _get_grad_time_fracs(self):
+        grad_time_fracs = []
+        for block in self.layers:
+            grad_time_frac = block.seq_modeling_block._get_grad_time_frac()
+
+            grad_time_fracs.append(grad_time_frac)
+
+        return grad_time_fracs
 
     def forward(
         self,
