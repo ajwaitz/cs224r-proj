@@ -8,7 +8,7 @@ from utils import layer_init
 import tyro
 import random
 from tqdm import tqdm
-from ttt_custom import TTTConfig, TTTModel
+from ttt import TTTConfig, TTTModel
 from dagger import TTTActor
 from dagger import make_env
 from dataclasses import dataclass
