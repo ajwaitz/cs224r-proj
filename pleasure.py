@@ -111,6 +111,8 @@ if __name__ == "__main__":
     matryoshka_actor = TTTActor(envs, intermediate_size=64, obs_mask=obs_mask)
     matryoshka_actor.load_state_dict(state_dict)
 
+    matryoshka_actor = matryoshka_actor.to(device)
+
     matryoshka_actor.eval()
 
     main(matryoshka_actor)

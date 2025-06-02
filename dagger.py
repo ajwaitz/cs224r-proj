@@ -213,7 +213,8 @@ if __name__ == "__main__":
 
     expert_trajectory = False
     # sometimes sample expert trajectories
-    if np.random.random() < (1 - i / num_episodes):
+    if np.random.random() < 0.1:
+    # if np.random.random() < (1 - i / num_episodes):
         expert_trajectory = True
     
     # sample a trajectory 
@@ -225,7 +226,10 @@ if __name__ == "__main__":
       
       with torch.no_grad():
         # unsqueeze is to add singleton batch dim
-        action, _, _, _ = learner.get_action_and_value(trajectory_obs)
+        if expert_trajectory:
+          action, _, _, _ = teacher.get_action_and_value(trajectory_obs)
+        else:
+          action, _, _, _ = learner.get_action_and_value(trajectory_obs)
         action = action[:, -1:]
       
       next_obs, reward, termination, truncation, info = envs.step(action.flatten().cpu().numpy())
@@ -242,12 +246,12 @@ if __name__ == "__main__":
     expert_logits = teacher.actor(trajectory_obs_tensor)
     learner_logits = learner.forward(trajectory_obs_tensor)
 
-    # breakpoint()
     expert_probs = torch.softmax(expert_logits, dim=-1)
     expert_action_indices = torch.argmax(expert_probs, dim=-1)
 
     # TODO perhaps KL divergence might be better here? 
-    loss = torch.nn.functional.cross_entropy(learner_logits.view(-1, 2), expert_action_indices.view(-1))
+    loss = F.cross_entropy(learner_logits.view(-1, 2), expert_action_indices.view(-1))
+    # loss = F.kl_div(F.log_softmax(learner_logits, dim=-1), F.log_softmax(expert_logits, dim=-1), reduction='batchmean', log_target=True)
     
     # Scale loss by accumulation steps to maintain consistent gradient magnitude
     loss = loss / accumulation_steps
@@ -269,8 +273,9 @@ if __name__ == "__main__":
       accumulated_loss = 0.0
 
     all_seqlens.append(len(rewards))
-    rewards = np.stack(rewards, axis=1)
-    all_rewards.extend(rewards.sum(axis=1).tolist())
+    if not expert_trajectory:
+      rewards = np.stack(rewards, axis=1)
+      all_rewards.extend(rewards.sum(axis=1).tolist())
     
     if i % 100 == 0:
         current_lr = scheduler.get_last_lr()[0] if learning_rates else 1e-4
