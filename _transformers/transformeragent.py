@@ -1,5 +1,5 @@
 from utils import layer_init
-from transformers.transformer import Transformer
+from _transformers.transformer import Transformer
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
