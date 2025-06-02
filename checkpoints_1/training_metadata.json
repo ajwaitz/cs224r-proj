@@ -1,0 +1,7 @@
+{
+  "episode": 3000,
+  "num_episodes": 4000,
+  "batch_size": 64,
+  "accumulation_steps": 2,
+  "checkpoint_interval": 500
+}
