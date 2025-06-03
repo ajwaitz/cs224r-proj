@@ -113,17 +113,17 @@ if __name__ == "__main__":
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   
   envs = gym.vector.SyncVectorEnv(
-    [make_env("CartPole-v1", i, False, "CartPole-v1") for i in range(batch_size)]
+    [make_env("Acrobot-v1", i, False, "Acrobot-v1") for i in range(batch_size)]
   )
 
-  teacher_path = "/home/waitz/cs224r-proj/cartpole_agent.pth"
+  teacher_path = "/Users/kennydao/cs224r-proj/acrobot.pth"
 
   teacher = MLPAgent(envs).to(device)
   teacher.load_state_dict(torch.load(teacher_path, map_location=device))
   teacher.eval()
   print(f"Loaded expert model from {teacher_path}")
 
-  obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
+  obs_mask = torch.tensor([1, 1, 1, 1, 0, 0], device=device).view(1, 1, 6)
   learner = TTTActor(envs, obs_mask=obs_mask).to(device)
 
   num_episodes = 1500
@@ -155,7 +155,7 @@ if __name__ == "__main__":
     'model': {
       'learner_type': 'TTTActor',
       'intermediate_size': 64,
-      'obs_mask': [1, 0, 1, 0],  # position and velocity masked
+      'obs_mask': [1, 1, 1, 1, 0, 0],  # position and velocity masked
     },
     'ttt_config': {
       'vocab_size': int(envs.single_observation_space.shape[0]),
@@ -181,7 +181,7 @@ if __name__ == "__main__":
       'eta_min': 1e-6,
     },
     'environment': {
-      'env_id': 'CartPole-v1',
+      'env_id': 'Acrobot-v1',
       'observation_space_shape': [int(x) for x in envs.single_observation_space.shape],
       'action_space_n': int(envs.single_action_space.n),
     },
@@ -265,7 +265,7 @@ if __name__ == "__main__":
     expert_action_indices = torch.argmax(expert_probs, dim=-1)
 
     # TODO perhaps KL divergence might be better here? 
-    loss = F.cross_entropy(learner_logits.view(-1, 2), expert_action_indices.view(-1))
+    loss = F.cross_entropy(learner_logits.view(-1, envs.single_action_space.n), expert_action_indices.view(-1))
     # loss = F.kl_div(F.log_softmax(learner_logits, dim=-1), F.log_softmax(expert_logits, dim=-1), reduction='batchmean', log_target=True)
     
     # Scale loss by accumulation steps to maintain consistent gradient magnitude
@@ -303,7 +303,7 @@ if __name__ == "__main__":
     
     # Save checkpoint at regular intervals
     if (i + 1) % checkpoint_interval == 0:
-      checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_episode_{i+1}.pth")
+      checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_episode_{i+1}_acrobot.pth")
       checkpoint = {
         'episode': i + 1,
         'model_state_dict': learner.state_dict(),
@@ -319,7 +319,7 @@ if __name__ == "__main__":
       print(f"Checkpoint saved at episode {i+1}: {checkpoint_path}")
       
       # Also save as latest checkpoint for easy resuming
-      latest_checkpoint_path = os.path.join(checkpoint_dir, "latest_checkpoint.pth")
+      latest_checkpoint_path = os.path.join(checkpoint_dir, "latest_checkpoint_acrobot.pth")
       torch.save(checkpoint, latest_checkpoint_path)
   
   # Save final model
