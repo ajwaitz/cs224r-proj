@@ -1022,20 +1022,44 @@ class TTTLinear(TTTBase):
             # [B,nh,K,f]
 
             # TODO: these should be the grads we care about (also one in MLP version)
-            # (batch size, num_heads, mini_batch_size, head_dim)
+            # (batch size [1], num_heads, mini_batch_size, head_dim)
             grad_l_wrt_Z1 = ln_fused_l2_bwd(Z1, reconstruction_target, ln_weight, ln_bias)
 
             def skip_criteria():
+
+                # return False
+                """
+                        for i in range(len(gradlists)):
+                        # cat along mini_batch_size dim, such that new shape for each entry
+                        # is [b, num_heads, seqlen, head_dim]
+                        gradlists[i] = torch.cat(gradlists[i], dim=2)
+                """
+                grad = torch.norm(grad_l_wrt_Z1, dim=-1)
+                # shape [1, nh, mini_batch_size] now
+
+
+                grad = grad[0, :, :]
+                
+                # take average over heads
+                grad = torch.mean(grad, dim=0)
+                # take the average over mini-batch
+                grad = torch.mean(grad, dim=0)
+                # if the average gradient is too small, we skip the gradient
+                # update
+
+                return torch.all(grad < 15)
+
+
                 return False
                 # try learning rate skip
 
-                eta = eta_mini_batch[0, :, :, 0]
-                # average over mini-batch
-                eta = torch.mean(eta, dim=-1)
-                # average over heads
-                eta = torch.mean(eta, dim=0)
-                # if eta is too small, we skip the gradient update
-                return torch.all(eta < 0.00007)
+                # eta = eta_mini_batch[0, :, :, 0]
+                # # average over mini-batch
+                # eta = torch.mean(eta, dim=-1)
+                # # average over heads
+                # eta = torch.mean(eta, dim=0)
+                # # if eta is too small, we skip the gradient update
+                # return torch.all(eta < 0.00007)
             
             self._grads.append(grad_l_wrt_Z1)
 
@@ -1091,6 +1115,7 @@ class TTTLinear(TTTBase):
                     grad_W1_last = grad_W1[:, :, -1]
                     grad_b1_last = grad_b1[:, :, -1:]
             else:
+                # print('skipping gradient update')
                 # print('skipping gradient update')
                 # we skip, so don't do the gradient updates
                 # if use_dual_form:
