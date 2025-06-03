@@ -1,0 +1,54 @@
+{
+  "training": {
+    "num_episodes": 1500,
+    "batch_size": 64,
+    "accumulation_steps": 2,
+    "checkpoint_interval": 500,
+    "expert_trajectory_prob": 0.1
+  },
+  "model": {
+    "learner_type": "TTTActor",
+    "intermediate_size": 64,
+    "obs_mask": [
+      1,
+      0,
+      1,
+      0
+    ]
+  },
+  "ttt_config": {
+    "vocab_size": 4,
+    "hidden_size": 64,
+    "max_position_embeddings": 500,
+    "intermediate_size": 128,
+    "num_attention_heads": 2,
+    "num_hidden_layers": 4,
+    "dropout": 0.1,
+    "hidden_act": "relu",
+    "max_episode_steps": 500,
+    "ttt_layer_type": "linear",
+    "ttt_base_lr": 0.01
+  },
+  "optimizer": {
+    "type": "AdamW",
+    "lr": 0.001,
+    "weight_decay": 0.0001
+  },
+  "scheduler": {
+    "type": "CosineAnnealingLR",
+    "T_max": 750,
+    "eta_min": 1e-06
+  },
+  "environment": {
+    "env_id": "CartPole-v1",
+    "observation_space_shape": [
+      4
+    ],
+    "action_space_n": 2
+  },
+  "expert": {
+    "model_path": "/home/admin/cs224r-proj/cartpole_agent.pth",
+    "model_type": "MLPAgent"
+  },
+  "device": "cuda"
+}
