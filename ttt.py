@@ -1047,7 +1047,7 @@ class TTTLinear(TTTBase):
                 # if the average gradient is too small, we skip the gradient
                 # update
 
-                return torch.all(grad < 15)
+                return torch.all(grad < 20)
 
 
                 return False
