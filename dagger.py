@@ -11,6 +11,7 @@ from tqdm import tqdm
 from ttt import TTTConfig, TTTModel
 import os
 import json
+from transformer import Transformer
 
 class MLPAgent(nn.Module):
   def __init__(self, envs, intermediate_size=64):
@@ -71,7 +72,7 @@ class TTTActor(nn.Module):
   def forward(self, x):
     if self.obs_mask is not None:
       x = x * self.obs_mask
-    return self.head(self.actor(x).last_hidden_state)
+    return self.head(self.actor(x))
 
   def get_action_and_value(self, x, action=None):
     if self.obs_mask is not None:
@@ -86,82 +87,51 @@ class TTTActor(nn.Module):
     return action, probs.log_prob(action), probs.entropy(), None
 
 class TransformerActor(nn.Module):
-  def __init__(self, envs, intermediate_size=64, obs_mask=None):
-    super().__init__()
-    
-    self.obs_size = envs.single_observation_space.shape[0]
-    self.action_size = envs.single_action_space.n
-    self.intermediate_size = intermediate_size
-    
-    # Input embedding layer
-    self.input_embedding = nn.Linear(self.obs_size, intermediate_size)
-    
-    # Positional encoding
-    self.pos_encoding = nn.Parameter(torch.randn(1, 500, intermediate_size))
-    
-    # Transformer encoder
-    encoder_layer = nn.TransformerEncoderLayer(
-      d_model=intermediate_size,
-      nhead=4,
-      dim_feedforward=intermediate_size * 2,
-      dropout=0.1,
-      activation='relu',
-      batch_first=True
-    )
-    self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
-    
-    # Output head
-    self.head = nn.Linear(intermediate_size, self.action_size)
-    
-    self.obs_mask = None
-    if obs_mask is not None:
-      self.obs_mask = obs_mask
+    def __init__(self, envs, intermediate_size=64, obs_mask=None):
+        super().__init__()
+        transformer_config = {
+            "num_blocks": 4,  # This was num_hidden_layers
+            "embed_dim": intermediate_size,  # This was hidden_size
+            "num_heads": 2,  # Assuming 2 heads like TTTActor
+            "layer_norm": "post",
+            "dropout": 0.1,
+            # If it expects feedforward dimensions:
+            "ff_dim": intermediate_size * 2,  # Matching TTT's intermediate_size
+            "positional_encoding": "relative",
+        }
+        self.actor = Transformer(
+            config=transformer_config,
+            input_dim=envs.single_observation_space.shape[0],
+            max_episode_steps=500,
+        )
 
-  def forward(self, x):
-    if self.obs_mask is not None:
-      x = x * self.obs_mask
-    
-    # x shape: (batch_size, seq_len, obs_size)
-    batch_size, seq_len, _ = x.shape
-    
-    # Embed observations
-    x = self.input_embedding(x)  # (batch_size, seq_len, intermediate_size)
-    
-    # Add positional encoding
-    x = x + self.pos_encoding[:, :seq_len, :]
-    
-    # Apply transformer
-    x = self.transformer(x)  # (batch_size, seq_len, intermediate_size)
-    
-    # Apply output head
-    logits = self.head(x)  # (batch_size, seq_len, action_size)
-    
-    return logits
+        self.head = nn.Linear(intermediate_size, envs.single_action_space.n)
 
-  def get_action_and_value(self, x, action=None):
-    if self.obs_mask is not None:
-      x = x * self.obs_mask
-    
-    # x shape: (batch_size, seq_len, obs_size)
-    batch_size, seq_len, _ = x.shape
-    
-    # Embed observations
-    x = self.input_embedding(x)  # (batch_size, seq_len, intermediate_size)
-    
-    # Add positional encoding
-    x = x + self.pos_encoding[:, :seq_len, :]
-    
-    # Apply transformer
-    x = self.transformer(x)  # (batch_size, seq_len, intermediate_size)
-    
-    # Apply output head
-    logits = self.head(x)  # (batch_size, seq_len, action_size)
-    
-    probs = Categorical(logits=logits)
-    if action is None:
-      action = probs.sample()
-    return action, probs.log_prob(action), probs.entropy(), None
-  
+        self.obs_mask = None
+        if obs_mask is not None:
+            self.obs_mask = obs_mask.to(device)  # Move obs_mask to device
+
+    def forward(self, x):
+        if self.obs_mask is not None:
+            x = x * self.obs_mask
+        return self.head(self.actor(x))
+
+    def get_action_and_value(self, x, action=None):
+        if self.obs_mask is not None:
+            x = x * self.obs_mask
+
+        # First call forward to update last_hidden_state
+        self.actor(x)
+        # Then access last_hidden_state from the actor instance
+        hidden_states = self.actor.last_hidden_state
+        logits = self.head(hidden_states)
+
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        return action, probs.log_prob(action), probs.entropy(), None
+
+
 def make_env(env_id, idx, capture_video, run_name):
   def thunk():
     if capture_video and idx == 0:
@@ -193,26 +163,34 @@ if __name__ == "__main__":
     [make_env("CartPole-v1", i, False, "CartPole-v1") for i in range(batch_size)]
   )
 
-  teacher_path = "/home/waitz/cs224r-proj/cartpole_agent.pth"
+  teacher_path = "/home/admin/cs224r-proj/cartpole_agent.pth"
 
+  obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
+  learner = TransformerActor(envs, obs_mask=obs_mask).to(device)
   teacher = MLPAgent(envs).to(device)
   teacher.load_state_dict(torch.load(teacher_path, map_location=device))
   teacher.eval()
   print(f"Loaded expert model from {teacher_path}")
 
-  obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
-  learner = TTTActor(envs, obs_mask=obs_mask).to(device)
-
-  num_episodes = 1500
+  num_episodes = 10000
   
   # Gradient accumulation settings
-  accumulation_steps = 2  # Accumulate gradients over 4 episodes before optimizer step
+  accumulation_steps = 4  # Increased accumulation steps for more stable updates
+  max_grad_norm = 1.0  # Add gradient clipping
   
   # Move optimizer outside the loop to maintain optimization state
-  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-3, weight_decay=1e-5)
+  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-3, weight_decay=0.01)
   
-  # Add learning rate scheduler
-  scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_episodes//accumulation_steps, eta_min=1e-6)
+  # Add learning rate scheduler with warmup
+  num_warmup_steps = num_episodes // 10  # 10% of training for warmup
+  scheduler = torch.optim.lr_scheduler.OneCycleLR(
+      optimizer,
+      max_lr=1e-3,
+      total_steps=num_episodes,
+      pct_start=0.1,  # 10% warmup
+      div_factor=25,  # initial_lr = max_lr/25
+      final_div_factor=1e4  # final_lr = initial_lr/1e4
+  )
 
   # Checkpointing setup
   checkpoint_dir = "checkpoints"
@@ -305,7 +283,7 @@ if __name__ == "__main__":
 
     expert_trajectory = False
     # sometimes sample expert trajectories
-    if np.random.random() < 0.1:
+    if np.random.random() < 0.4:
     # if np.random.random() < (1 - i / num_episodes):
         expert_trajectory = True
     
@@ -341,9 +319,13 @@ if __name__ == "__main__":
     expert_probs = torch.softmax(expert_logits, dim=-1)
     expert_action_indices = torch.argmax(expert_probs, dim=-1)
 
-    # TODO perhaps KL divergence might be better here? 
-    loss = F.cross_entropy(learner_logits.view(-1, 2), expert_action_indices.view(-1))
-    # loss = F.kl_div(F.log_softmax(learner_logits, dim=-1), F.log_softmax(expert_logits, dim=-1), reduction='batchmean', log_target=True)
+    # Use KL divergence loss for better training stability
+    loss = F.kl_div(
+        F.log_softmax(learner_logits, dim=-1),
+        expert_probs,
+        reduction='batchmean',
+        log_target=False
+    )
     
     # Scale loss by accumulation steps to maintain consistent gradient magnitude
     loss = loss / accumulation_steps
@@ -354,15 +336,18 @@ if __name__ == "__main__":
     
     # Perform optimizer step only every accumulation_steps episodes
     if (i + 1) % accumulation_steps == 0:
-      optimizer.step()
-      optimizer.zero_grad()
-      
-      # Update learning rate
-      scheduler.step()
-      learning_rates.append(scheduler.get_last_lr()[0])
-      
-      # Reset accumulated loss
-      accumulated_loss = 0.0
+        # Clip gradients for stability
+        torch.nn.utils.clip_grad_norm_(learner.parameters(), max_grad_norm)
+        
+        optimizer.step()
+        optimizer.zero_grad()
+        
+        # Update learning rate
+        scheduler.step()
+        learning_rates.append(scheduler.get_last_lr()[0])
+        
+        # Reset accumulated loss
+        accumulated_loss = 0.0
 
     all_seqlens.append(len(rewards))
     if not expert_trajectory:
