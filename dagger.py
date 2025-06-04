@@ -84,6 +84,83 @@ class TTTActor(nn.Module):
     if action is None:
       action = probs.sample()
     return action, probs.log_prob(action), probs.entropy(), None
+
+class TransformerActor(nn.Module):
+  def __init__(self, envs, intermediate_size=64, obs_mask=None):
+    super().__init__()
+    
+    self.obs_size = envs.single_observation_space.shape[0]
+    self.action_size = envs.single_action_space.n
+    self.intermediate_size = intermediate_size
+    
+    # Input embedding layer
+    self.input_embedding = nn.Linear(self.obs_size, intermediate_size)
+    
+    # Positional encoding
+    self.pos_encoding = nn.Parameter(torch.randn(1, 500, intermediate_size))
+    
+    # Transformer encoder
+    encoder_layer = nn.TransformerEncoderLayer(
+      d_model=intermediate_size,
+      nhead=4,
+      dim_feedforward=intermediate_size * 2,
+      dropout=0.1,
+      activation='relu',
+      batch_first=True
+    )
+    self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
+    
+    # Output head
+    self.head = nn.Linear(intermediate_size, self.action_size)
+    
+    self.obs_mask = None
+    if obs_mask is not None:
+      self.obs_mask = obs_mask
+
+  def forward(self, x):
+    if self.obs_mask is not None:
+      x = x * self.obs_mask
+    
+    # x shape: (batch_size, seq_len, obs_size)
+    batch_size, seq_len, _ = x.shape
+    
+    # Embed observations
+    x = self.input_embedding(x)  # (batch_size, seq_len, intermediate_size)
+    
+    # Add positional encoding
+    x = x + self.pos_encoding[:, :seq_len, :]
+    
+    # Apply transformer
+    x = self.transformer(x)  # (batch_size, seq_len, intermediate_size)
+    
+    # Apply output head
+    logits = self.head(x)  # (batch_size, seq_len, action_size)
+    
+    return logits
+
+  def get_action_and_value(self, x, action=None):
+    if self.obs_mask is not None:
+      x = x * self.obs_mask
+    
+    # x shape: (batch_size, seq_len, obs_size)
+    batch_size, seq_len, _ = x.shape
+    
+    # Embed observations
+    x = self.input_embedding(x)  # (batch_size, seq_len, intermediate_size)
+    
+    # Add positional encoding
+    x = x + self.pos_encoding[:, :seq_len, :]
+    
+    # Apply transformer
+    x = self.transformer(x)  # (batch_size, seq_len, intermediate_size)
+    
+    # Apply output head
+    logits = self.head(x)  # (batch_size, seq_len, action_size)
+    
+    probs = Categorical(logits=logits)
+    if action is None:
+      action = probs.sample()
+    return action, probs.log_prob(action), probs.entropy(), None
   
 def make_env(env_id, idx, capture_video, run_name):
   def thunk():
