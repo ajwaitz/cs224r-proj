@@ -240,10 +240,10 @@ if __name__ == "__main__":
     [make_env("CartPole-v1", i, False, "CartPole-v1") for i in range(batch_size)]
   )
 
-  teacher_path = "/home/admin/cs224r-proj/cartpole_agent.pth"
+  teacher_path = "/home/waitz/cs224r-proj/cartpole_agent.pth"
 
   obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
-  #learner = LlamaTransformerActor(envs, obs_mask=obs_mask).to(device)
+  # learner = LlamaTransformerActor(envs, obs_mask=obs_mask).to(device)
   learner = TTTActor(envs, obs_mask=obs_mask).to(device)
   teacher = MLPAgent(envs).to(device)
   teacher.load_state_dict(torch.load(teacher_path, map_location=device))
@@ -256,6 +256,8 @@ if __name__ == "__main__":
   accumulation_steps = 4  # Increased accumulation steps for more stable updates
   max_grad_norm = 1.0  # Add gradient clipping
   
+  
+
   # Move optimizer outside the loop to maintain optimization state
   optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4, weight_decay=0.001)
   
@@ -263,7 +265,7 @@ if __name__ == "__main__":
   num_warmup_steps = num_episodes // 10  # 10% of training for warmup
   scheduler = torch.optim.lr_scheduler.OneCycleLR(
       optimizer,
-      max_lr=1e-3,
+      max_lr=1e-4,
       total_steps=num_episodes,
       pct_start=0.1,  # 10% warmup
       div_factor=25,  # initial_lr = max_lr/25
