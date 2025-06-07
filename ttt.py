@@ -1027,6 +1027,7 @@ class TTTLinear(TTTBase):
 
             def skip_criteria():
 
+                # print('ss')
                 # return False
                 """
                         for i in range(len(gradlists)):
@@ -1047,7 +1048,7 @@ class TTTLinear(TTTBase):
                 # if the average gradient is too small, we skip the gradient
                 # update
 
-                return torch.all(grad < 20)
+                return torch.all(grad < 10)
 
 
                 return False

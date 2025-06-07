@@ -12,6 +12,7 @@ from ttt import TTTConfig, TTTModel
 import os
 import json
 from transformer import Transformer
+from transformers import LlamaConfig, LlamaModel
 
 class MLPAgent(nn.Module):
   def __init__(self, envs, intermediate_size=64):
@@ -85,6 +86,82 @@ class TTTActor(nn.Module):
     if action is None:
       action = probs.sample()
     return action, probs.log_prob(action), probs.entropy(), None
+
+class LlamaTransformerActor(nn.Module):
+    def __init__(self, envs, intermediate_size=64, obs_mask=None):
+        super().__init__()
+        
+        # Configure Llama model
+        self.config = LlamaConfig(
+            vocab_size=1000,  # Not used for continuous inputs
+            hidden_size=intermediate_size,
+            intermediate_size=intermediate_size * 2,  # Standard 4x expansion
+            num_hidden_layers=4,
+            num_attention_heads=2,
+            max_position_embeddings=500,
+            rms_norm_eps=1e-6,
+            tie_word_embeddings=False,
+            rope_theta=10000.0,
+            attention_dropout=0.0,
+            use_cache=False,
+        )
+        
+        # Initialize Llama model
+        self.llama = LlamaModel(self.config)
+        
+        # Input projection to match Llama's expected input
+        self.input_projection = nn.Linear(
+            envs.single_observation_space.shape[0], 
+            intermediate_size
+        )
+        
+        # Language model head for action prediction
+        self.lm_head = nn.Linear(
+            intermediate_size, 
+            envs.single_action_space.n,
+            bias=False
+        )
+        
+        self.obs_mask = None
+        if obs_mask is not None:
+            self.obs_mask = obs_mask
+    
+    def forward(self, x):
+        if self.obs_mask is not None:
+            x = x * self.obs_mask
+        
+        # Project observations to hidden size
+        x = self.input_projection(x)
+        
+        # Pass through Llama transformer
+        outputs = self.llama(inputs_embeds=x)
+        hidden_states = outputs.last_hidden_state
+        
+        # Apply language model head
+        logits = self.lm_head(hidden_states)
+        
+        return logits
+    
+    def get_action_and_value(self, x, action=None):
+        if self.obs_mask is not None:
+            x = x * self.obs_mask
+        
+        # Project observations to hidden size
+        x = self.input_projection(x)
+        
+        # Pass through Llama transformer
+        outputs = self.llama(inputs_embeds=x)
+        hidden_states = outputs.last_hidden_state
+        
+        # Apply language model head
+        logits = self.lm_head(hidden_states)
+        
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        
+        return action, probs.log_prob(action), probs.entropy(), None
+
 
 class TransformerActor(nn.Module):
     def __init__(self, envs, intermediate_size=64, obs_mask=None):
@@ -166,7 +243,8 @@ if __name__ == "__main__":
   teacher_path = "/home/admin/cs224r-proj/cartpole_agent.pth"
 
   obs_mask = torch.tensor([1, 0, 1, 0], device=device).view(1, 1, 4)
-  learner = TransformerActor(envs, obs_mask=obs_mask).to(device)
+  #learner = LlamaTransformerActor(envs, obs_mask=obs_mask).to(device)
+  learner = TTTActor(envs, obs_mask=obs_mask).to(device)
   teacher = MLPAgent(envs).to(device)
   teacher.load_state_dict(torch.load(teacher_path, map_location=device))
   teacher.eval()
@@ -179,7 +257,7 @@ if __name__ == "__main__":
   max_grad_norm = 1.0  # Add gradient clipping
   
   # Move optimizer outside the loop to maintain optimization state
-  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-3, weight_decay=0.01)
+  optimizer = torch.optim.AdamW(learner.parameters(), lr=1e-4, weight_decay=0.001)
   
   # Add learning rate scheduler with warmup
   num_warmup_steps = num_episodes // 10  # 10% of training for warmup
@@ -319,13 +397,8 @@ if __name__ == "__main__":
     expert_probs = torch.softmax(expert_logits, dim=-1)
     expert_action_indices = torch.argmax(expert_probs, dim=-1)
 
-    # Use KL divergence loss for better training stability
-    loss = F.kl_div(
-        F.log_softmax(learner_logits, dim=-1),
-        expert_probs,
-        reduction='batchmean',
-        log_target=False
-    )
+    # Use cross entropy loss for supervised learning
+    loss = F.cross_entropy(learner_logits.view(-1, learner_logits.size(-1)), expert_action_indices.view(-1))
     
     # Scale loss by accumulation steps to maintain consistent gradient magnitude
     loss = loss / accumulation_steps
@@ -357,7 +430,10 @@ if __name__ == "__main__":
     if i % 100 == 0:
         current_lr = scheduler.get_last_lr()[0] if learning_rates else 1e-4
         print(f"Episode {i}, DAgger Loss: {accumulated_loss * accumulation_steps:.4f}, LR: {current_lr:.6f}")
-        print(f"Learner return: {sum(all_rewards) / len(all_rewards)}")
+        try:
+          print(f"Learner return: {sum(all_rewards) / len(all_rewards)}")
+        except:
+          print(f"No rewards yet")
         # print(f"Learner seqlen: {sum(all_seqlens) / len(all_seqlens)}")
 
         all_rewards = []
