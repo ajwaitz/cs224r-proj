@@ -19,6 +19,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
 from transformers.utils.import_utils import is_causal_conv1d_available
 import time
+import os
 
 if is_causal_conv1d_available():
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -1047,7 +1048,8 @@ class TTTLinear(TTTBase):
                 # if the average gradient is too small, we skip the gradient
                 # update
 
-                return torch.all(grad < 20)
+                threshold = int(os.environ.get("TTT_THRESHOLD"))
+                return torch.all(grad < threshold)
 
 
                 return False

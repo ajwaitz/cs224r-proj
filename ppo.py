@@ -10,10 +10,6 @@ from collections import deque
 import gymnasium as gym
 # from gym_pomdp_wrappers import MuJoCoHistoryEnv
 
-import popgym
-from popgym.wrappers import PreviousAction, Antialias, Markovian, Flatten, DiscreteAction
-from popgym.core.observability import Observability, STATE
-
 import numpy as np
 import torch
 import torch.nn as nn

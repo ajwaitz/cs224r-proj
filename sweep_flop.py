@@ -14,6 +14,7 @@ from dagger import make_env
 from dataclasses import dataclass
 import json
 import os
+from torch.profiler import profile, record_function, ProfilerActivity
 
 def load_model(model_path):
     # Set inference device and default tensor type
@@ -58,53 +59,19 @@ def sample_trajectory(actor):
     # }
 
     # Warmup steps - just forward passes
-    for _ in range(100):
+    warmup_obs = torch.cat([obs] * 100, dim=1)
+    for _ in range(1):
         with torch.no_grad():
-            if traj_obs is None:
-                warmup_obs = obs.clone()
-            else:
-                warmup_obs = torch.cat((warmup_obs, obs), dim=1)
-            actor.get_action_and_value(warmup_obs)
-            
-
-    while not done:
-        if traj_obs is None:
-            traj_obs = obs.clone()
-        else:
-            traj_obs = torch.cat((traj_obs, obs), dim=1)
-        
-        with torch.no_grad():
-            # actor itself will throw out (mask) some pieces of the obs to make it a POMDP
-            # we don't need to handle that here
-            action, _, _, _ = actor.get_action_and_value(traj_obs)
-            action = action[:, -1:]
-        
-        next_obs, reward, termination, truncation, _ = envs.step(action.flatten().cpu().numpy())
-        done = termination.any() or truncation.any()
-        episode_rewards.append(reward)
-        obs = torch.Tensor(next_obs).to(device).unsqueeze(1)
-        t += 1
-
-        # data["etas"].append(actor.actor._get_eta().tolist())
-        # data["grads"].append(actor.actor._get_gradlists().tolist())
-        # data["grad_time_fracs"].append(actor.actor._get_grad_time_fracs())
-        # data["lrs"].append(actor.actor._get_lr().tolist())
-        # data["total_time"].append(actor.actor._get_time_forward())
-
-    # print(f"Episode rewards: {episode_rewards}")
-    # print(f"Episode length: {t}")
-    # print(f"Episode reward mean: {np.mean(episode_rewards)}")
-    # print(f"Episode reward std: {np.std(episode_rewards)}")
-
-    out = {
-        "episode_rewards": [elem[0] for elem in episode_rewards],
-        "t": t,
-        # these are both regular lists (not np arrays)
-        "grad_time_frac": actor.actor._get_grad_time_fracs(),
-        "time_forward": actor.actor._get_time_forward()
-    }
-
-    return out
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                record_shapes=True,
+                with_flops=True,
+                profile_memory=False,
+                with_stack=False,
+            ) as prof:
+                actor.get_action_and_value(warmup_obs)
+            total_flops = sum([event.flops for event in prof.key_averages() if event.flops > 0])
+            print(f"Total FLOPs: {total_flops}")
 
 def sweep(actor):
     samples_per_config = 64
@@ -117,9 +84,9 @@ def sweep(actor):
     for grad_threshold in thresholds:
       os.environ['TTT_THRESHOLD'] = str(grad_threshold)
 
-      for i in tqdm(range(samples_per_config)):
-        out = sample_trajectory(actor)
-        data[grad_threshold].append(out)
+      print("Grad threshold: ", grad_threshold)
+      out = sample_trajectory(actor)
+        # data[grad_threshold].append(out)
 
         # episode_rewards, t, grad_time_frac, time_forward = sample_trajectory(actor)
         # data[grad_threshold].append({
@@ -132,12 +99,12 @@ def sweep(actor):
         # })
         # print(f"Grad threshold: {grad_threshold}, Episode rewards: {episode_rewards}, Episode length: {t}, Episode reward mean: {mean}, Episode reward std: {std}")
 
-      average_episode_rewards = np.mean([d["t"] for d in data[grad_threshold]])
-      average_forward_time = np.mean([np.sum(d["time_forward"]) / d["t"] for d in data[grad_threshold]])
-      # average_forward_time_per_layer = np.mean([d["time_forward"] for d in data[grad_threshold]], axis=0)
-      average_grad_frac = np.mean([d["grad_time_frac"] for d in data[grad_threshold]])
+      # average_episode_rewards = np.mean([d["t"] for d in data[grad_threshold]])
+      # average_forward_time = np.mean([np.sum(d["time_forward"]) / d["t"] for d in data[grad_threshold]])
+      # # average_forward_time_per_layer = np.mean([d["time_forward"] for d in data[grad_threshold]], axis=0)
+      # average_grad_frac = np.mean([d["grad_time_frac"] for d in data[grad_threshold]])
 
-      print(f"Grad threshold: {grad_threshold}, Average episode length: {average_episode_rewards}, Average forward time: {average_forward_time}, Average grad frac: {average_grad_frac}")
+      # print(f"Grad threshold: {grad_threshold}, Average episode length: {average_episode_rewards}, Average forward time: {average_forward_time}, Average grad frac: {average_grad_frac}")
 
       # average_episode_rewards = np.mean([d["mean"] for d in data[grad_threshold]])
       # average_episode_length = np.mean([d["t"] for d in data[grad_threshold]])
