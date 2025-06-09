@@ -152,9 +152,9 @@ class PPOTrainer:
         print(f"Loading expert trajectories for BC from {expert_data_path}...")
         # try:
         import json
-        with open("/home/waitz/cs224r-proj/trajectories/mlp/CartPole-v1__ppo_mlp_expert__mlp__expert_trajectories_1000eps.json", "r") as f:
+        with open("/Users/kennydao/cs224r-proj/episodic-transformer-memory-ppo/trajectories/mlp/CartPole-v1__ppo_mlp_expert__mlp__expert_trajectories_1000eps.pkl", "rb") as f:
         # with open(expert_data_path.replace(".pkl", ".json"), "r") as f:
-            trajectories = json.load(f)
+            trajectories = pickle.load(f)
         print(f"Successfully loaded trajectories from JSON file: {expert_data_path}")
         
 
