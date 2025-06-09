@@ -1,4 +1,4 @@
-# 224r final proj
+# Test-Time Training for Efficient RL Sequence Modeling
 
 # commands
 ```
