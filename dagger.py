@@ -11,6 +11,7 @@ from tqdm import tqdm
 from ttt import TTTConfig, TTTModel
 import os
 import json
+import wandb
 
 class MLPAgent(nn.Module):
   def __init__(self, envs, intermediate_size=64):
@@ -112,11 +113,22 @@ if __name__ == "__main__":
 
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   
+  # Initialize wandb
+  wandb.init(
+    project="acrobot-dagger-ttt",
+    name="dagger_ttt_training",
+    config={
+      "batch_size": batch_size,
+      "device": str(device),
+      "environment": "Acrobot-v1"
+    }
+  )
+  
   envs = gym.vector.SyncVectorEnv(
     [make_env("Acrobot-v1", i, False, "Acrobot-v1") for i in range(batch_size)]
   )
 
-  teacher_path = "/Users/kennydao/cs224r-proj/acrobot.pth"
+  teacher_path = "/home/waitz/cs224r-proj/acrobot.pth"
 
   teacher = MLPAgent(envs).to(device)
   teacher.load_state_dict(torch.load(teacher_path, map_location=device))
@@ -197,6 +209,9 @@ if __name__ == "__main__":
   with open(config_path, 'w') as f:
     json.dump(config, f, indent=2)
   print(f"Configuration saved to {config_path}")
+  
+  # Update wandb config with complete configuration
+  wandb.config.update(config)
   
   # Initialize training state
   start_episode = 0
@@ -284,19 +299,52 @@ if __name__ == "__main__":
       scheduler.step()
       learning_rates.append(scheduler.get_last_lr()[0])
       
+      # Log to wandb
+      wandb.log({
+        "train/loss": accumulated_loss * accumulation_steps,
+        "train/learning_rate": scheduler.get_last_lr()[0],
+        "train/episode": i + 1
+      })
+      
       # Reset accumulated loss
       accumulated_loss = 0.0
 
     all_seqlens.append(len(rewards))
     if not expert_trajectory:
       rewards = np.stack(rewards, axis=1)
-      all_rewards.extend(rewards.sum(axis=1).tolist())
+      episode_rewards = rewards.sum(axis=1).tolist()
+      all_rewards.extend(episode_rewards)
+      
+      # Log individual episode rewards to wandb
+      for env_idx, reward in enumerate(episode_rewards):
+        wandb.log({
+          f"episode/reward_env_{env_idx}": reward,
+          "episode/step": i + 1,
+          "episode/is_expert": expert_trajectory
+        })
     
+    # Log episode length and trajectory type
+    wandb.log({
+      "episode/length": len(rewards),
+      "episode/is_expert_trajectory": expert_trajectory,
+      "episode/step": i + 1
+    })
+
     if i % 100 == 0:
         current_lr = scheduler.get_last_lr()[0] if learning_rates else 1e-4
         print(f"Episode {i}, DAgger Loss: {accumulated_loss * accumulation_steps:.4f}, LR: {current_lr:.6f}")
         print(f"Learner return: {sum(all_rewards) / len(all_rewards)}")
         # print(f"Learner seqlen: {sum(all_seqlens) / len(all_seqlens)}")
+
+        # Log summary statistics to wandb
+        if all_rewards:
+          avg_reward = sum(all_rewards) / len(all_rewards)
+          wandb.log({
+            "summary/avg_reward_100ep": avg_reward,
+            "summary/num_episodes_completed": len(all_rewards),
+            "summary/avg_episode_length": sum(all_seqlens) / len(all_seqlens) if all_seqlens else 0,
+            "summary/current_episode": i
+          })
 
         all_rewards = []
         all_seqlens = []
@@ -318,6 +366,12 @@ if __name__ == "__main__":
       torch.save(checkpoint, checkpoint_path)
       print(f"Checkpoint saved at episode {i+1}: {checkpoint_path}")
       
+      # Log checkpoint saving to wandb
+      wandb.log({
+        "checkpoint/episode": i + 1,
+        "checkpoint/path": checkpoint_path
+      })
+      
       # Also save as latest checkpoint for easy resuming
       latest_checkpoint_path = os.path.join(checkpoint_dir, "latest_checkpoint_acrobot.pth")
       torch.save(checkpoint, latest_checkpoint_path)
@@ -331,4 +385,23 @@ if __name__ == "__main__":
     'learning_rates': learning_rates
   }, final_model_path)
   print(f"Final model saved: {final_model_path}")
+  
+  # Save final model as wandb artifact
+  artifact = wandb.Artifact(
+    name="acrobot_dagger_ttt_model",
+    type="model",
+    description="Final DAgger TTT model trained on Acrobot-v1"
+  )
+  artifact.add_file(final_model_path)
+  wandb.log_artifact(artifact)
+  
+  # Log final training completion
+  wandb.log({
+    "training/completed": True,
+    "training/total_episodes": num_episodes,
+    "training/final_lr": learning_rates[-1] if learning_rates else None
+  })
+  
+  # Finish wandb run
+  wandb.finish()
   

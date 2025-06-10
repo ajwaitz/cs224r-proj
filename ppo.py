@@ -41,9 +41,11 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+    video_freq: int = 50
+    """frequency of video recording in iterations (0 to disable periodic recording)"""
 
     # Algorithm specific arguments
-    env_id: str = "CartPole-v1"
+    env_id: str = "Acrobot-v1"
     """the id of the environment"""
     total_timesteps: int = 1228800  # 16 workers * 256 steps * 300 updates
     """total timesteps of the experiments"""
@@ -92,7 +94,7 @@ class Args:
     """the path to save the model weights, if specified. if not, the model weights will not be saved."""
 
 
-def make_env(env_id, idx, capture_video, run_name):
+def make_env(env_id, idx, capture_video, run_name, should_record_video=False, iteration=None):
 
     # def thunk():
     #     # https://popgym.readthedocs.io/en/latest/environment_quickstart.html
@@ -119,11 +121,15 @@ def make_env(env_id, idx, capture_video, run_name):
     # return thunk
 
     def thunk():
-        if capture_video and idx == 0:
+        if (capture_video or should_record_video) and idx == 0:
             # env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
 
             env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+            if iteration is not None:
+                video_folder = f"videos/{run_name}/iteration_{iteration}"
+            else:
+                video_folder = f"videos/{run_name}"
+            env = gym.wrappers.RecordVideo(env, video_folder)
         else:
             env = gym.make(env_id)
             # env = MuJoCoHistoryEnv("Walker2d-v2", hist_len=4, history_type="history_ac_pomdp")
@@ -170,12 +176,15 @@ class MLPAgent(nn.Module):
             nn.Tanh(),
             layer_init(nn.Linear(intermediate_size, envs.single_action_space.n), std=0.01),
         )
+        self._mask = torch.tensor([1.0, 1.0, 1.0, 1.0, 0.0, 0.0], dtype=torch.float32)
 
     def get_value(self, x):
-        return self.critic(x)
+        self._mask = self._mask.to(x.device)
+        return self.critic(x * self._mask)
 
     def get_action_and_value(self, x, action=None):
-        logits = self.actor(x)
+        self._mask = self._mask.to(x.device)
+        logits = self.actor(x * self._mask)
         probs = Categorical(logits=logits)
         if action is None:
             action = probs.sample()
@@ -251,6 +260,38 @@ if __name__ == "__main__":
     next_done = torch.zeros(args.num_envs).to(device)
 
     for iteration in range(1, args.num_iterations + 1):
+        # Check if we should record video this iteration
+        should_record_video = (args.video_freq > 0 and iteration % args.video_freq == 0)
+        
+        # Recreate environments if video recording status changed
+        if should_record_video and not args.capture_video:
+            print(f"Recording video at iteration {iteration}")
+            # Close existing environments
+            envs.close()
+            # Create new environments with video recording enabled
+            envs = gym.vector.SyncVectorEnv(
+                [make_env(args.env_id, i, args.capture_video, run_name, should_record_video=True, iteration=iteration) for i in range(args.num_envs)],
+            )
+            # Reset environment state
+            next_obs, _ = envs.reset(seed=args.seed)
+            next_obs = torch.Tensor(next_obs).to(device)
+            next_done = torch.zeros(args.num_envs).to(device)
+        elif not should_record_video and not args.capture_video:
+            # If we were recording in the previous iteration but not this one, revert to non-recording environments
+            previous_should_record = (args.video_freq > 0 and (iteration - 1) % args.video_freq == 0)
+            if previous_should_record and iteration > 1:
+                print(f"Stopping video recording after iteration {iteration - 1}")
+                # Close existing environments
+                envs.close()
+                # Create new environments without video recording
+                envs = gym.vector.SyncVectorEnv(
+                    [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
+                )
+                # Reset environment state
+                next_obs, _ = envs.reset(seed=args.seed)
+                next_obs = torch.Tensor(next_obs).to(device)
+                next_done = torch.zeros(args.num_envs).to(device)
+
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
